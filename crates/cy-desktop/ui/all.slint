@@ -1,0 +1,5 @@
+// Slint 一次只编译一个入口文件，所以这里把两个顶层组件汇到一处再导出。
+import { AppWindow, TunnelUi } from "app.slint";
+import { TrayIcon } from "tray.slint";
+
+export { AppWindow, TunnelUi, TrayIcon }

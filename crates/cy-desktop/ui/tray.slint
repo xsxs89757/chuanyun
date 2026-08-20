@@ -1,0 +1,37 @@
+import { Theme } from "theme.slint";
+
+// 托盘图标。
+//
+// 交互全部走菜单，不依赖「点击图标」——macOS 上一旦挂了菜单，单击回调就不再触发了。
+// 好在我们要的三个动作本来就适合放菜单里。
+export component TrayIcon inherits SystemTrayIcon {
+    in property <bool> connected;
+    in property <int> tunnel-count;
+
+    icon: @image-url("icon.png");
+    tooltip: root.connected
+        ? @tr("穿云 · {} 条隧道", root.tunnel-count)
+        : @tr("穿云 · 未连接");
+
+    callback show-window();
+    callback stop-all();
+    callback quit();
+
+    Menu {
+        MenuItem {
+            title: @tr("显示穿云");
+            activated => { root.show-window(); }
+        }
+        MenuSeparator {}
+        MenuItem {
+            title: @tr("停止所有隧道");
+            enabled: root.tunnel-count > 0;
+            activated => { root.stop-all(); }
+        }
+        MenuSeparator {}
+        MenuItem {
+            title: @tr("退出");
+            activated => { root.quit(); }
+        }
+    }
+}

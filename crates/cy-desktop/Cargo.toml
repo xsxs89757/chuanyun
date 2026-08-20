@@ -26,6 +26,7 @@ toml.workspace = true
 auto-launch.workspace = true
 qrcode.workspace = true
 directories.workspace = true
+arboard = "3.6.1"
 
 [build-dependencies]
 slint-build.workspace = true

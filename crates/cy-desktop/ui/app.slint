@@ -1,16 +1,445 @@
-import { VerticalBox } from "std-widgets.slint";
+import { Button, LineEdit, ScrollView, Switch, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AboutSlint } from "std-widgets.slint";
+
+// 界面上的一条隧道。字段是从 cy-core 的状态映射过来的，界面自己不推导任何东西。
+export struct TunnelUi {
+    name: string,
+    local-port: int,
+    // 公网地址；空字符串表示还没开通
+    url: string,
+    enabled: bool,
+    // 开通失败的原因，空表示没出错
+    error: string,
+}
+
+component StatusDot inherits Rectangle {
+    in property <bool> on;
+    in property <bool> pending;
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: root.on ? Theme.ok : (root.pending ? Theme.warn : Theme.muted);
+    opacity: root.pending ? 0.6 : 1.0;
+}
+
+component Card inherits Rectangle {
+    background: Theme.card;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.line;
+}
+
+// 一条隧道的卡片
+component TunnelRow inherits Card {
+    in property <TunnelUi> tunnel;
+    callback toggle(bool);
+    callback copy();
+    callback remove();
+    callback show-qr();
+
+    height: self.preferred-height;
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: 6px;
+
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+
+            StatusDot {
+                on: root.tunnel.url != "";
+                pending: root.tunnel.enabled && root.tunnel.url == "";
+                y: 6px;
+            }
+
+            Text {
+                text: root.tunnel.name;
+                font-size: 15px;
+                font-weight: 600;
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            Switch {
+                checked: root.tunnel.enabled;
+                toggled => { root.toggle(self.checked); }
+            }
+        }
+
+        Text {
+            text: "127.0.0.1:" + root.tunnel.local-port;
+            font-size: 12px;
+            color: Theme.muted;
+        }
+
+        if root.tunnel.url != "": HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.tunnel.url;
+                font-size: 13px;
+                color: Theme.accent-ink;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Button { text: @tr("复制"); clicked => { root.copy(); } }
+            Button { text: @tr("二维码"); clicked => { root.show-qr(); } }
+        }
+
+        if root.tunnel.error != "": Rectangle {
+            background: Theme.danger-soft;
+            border-radius: 4px;
+            height: msg.preferred-height + 12px;
+            msg := Text {
+                text: root.tunnel.error;
+                font-size: 12px;
+                color: Theme.danger;
+                wrap: word-wrap;
+                x: 8px;
+                width: parent.width - 16px;
+                y: 6px;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            Button { text: @tr("删除"); clicked => { root.remove(); } }
+        }
+    }
+}
 
 export component AppWindow inherits Window {
-    title: "穿云";
-    preferred-width: 720px;
-    preferred-height: 520px;
+    title: @tr("穿云");
+    preferred-width: 640px;
+    preferred-height: 560px;
+    min-width: 480px;
+    min-height: 420px;
+    background: Theme.bg;
+    icon: @image-url("icon.png");
 
-    in property <string> status: "未连接";
+    // ---- 由 Rust 侧填充 ----
+    in property <bool> logged-in;
+    in property <bool> connected;
+    in property <string> status-text: @tr("未连接");
+    in property <int> reconnect-attempt;
+    in property <string> domain-suffix;
+    in property <[TunnelUi]> tunnels;
+    in property <string> login-error;
+    in property <bool> login-busy;
+    in property <string> default-server;
+    in property <string> version;
+    // 二维码弹层：非空时显示
+    in property <image> qr-image;
+    in property <string> qr-url;
+    // 设置项
+    in-out property <bool> autostart;
 
-    VerticalBox {
+    // ---- 由界面触发 ----
+    callback login(string, string, string);
+    callback logout();
+    callback add-tunnel(string, int);
+    callback toggle-tunnel(string, bool);
+    callback remove-tunnel(string);
+    callback copy-url(string);
+    callback show-qr(string);
+    callback close-qr();
+    callback set-autostart(bool);
+
+    // 页面：0 = 隧道列表，1 = 设置
+    property <int> page: 0;
+    property <bool> adding: false;
+
+    // ================= 登录页 =================
+    if !root.logged-in: VerticalLayout {
+        padding: 32px;
+        spacing: 14px;
+        alignment: center;
+
         Text {
-            text: root.status;
+            text: @tr("穿云");
+            font-size: 26px;
+            font-weight: 700;
+            color: Theme.ink;
             horizontal-alignment: center;
+        }
+        Text {
+            text: @tr("输入管理员发给你的凭证即可开始");
+            font-size: 13px;
+            color: Theme.muted;
+            horizontal-alignment: center;
+        }
+
+        Rectangle { height: 8px; }
+
+        Text { text: @tr("服务器"); font-size: 12px; color: Theme.muted; }
+        server-input := LineEdit {
+            text: root.default-server;
+            placeholder-text: @tr("例如 tunnel.example.com:7000");
+        }
+
+        Text { text: @tr("凭证"); font-size: 12px; color: Theme.muted; }
+        token-input := LineEdit {
+            placeholder-text: "cy_...";
+            // 凭证是密码级的东西，别在屏幕上明晃晃地摆着
+            input-type: password;
+        }
+
+        Text { text: @tr("证书指纹（内部版可留空）"); font-size: 12px; color: Theme.muted; }
+        pin-input := LineEdit {
+            placeholder-text: @tr("留空则首次连接时信任服务器");
+        }
+
+        if root.login-error != "": Rectangle {
+            background: Theme.danger-soft;
+            border-radius: 4px;
+            height: err.preferred-height + 16px;
+            err := Text {
+                text: root.login-error;
+                color: Theme.danger;
+                font-size: 12px;
+                wrap: word-wrap;
+                x: 10px;
+                y: 8px;
+                width: parent.width - 20px;
+            }
+        }
+
+        Button {
+            text: root.login-busy ? @tr("正在连接…") : @tr("登录");
+            primary: true;
+            enabled: !root.login-busy;
+            clicked => {
+                root.login(server-input.text, token-input.text, pin-input.text);
+            }
+        }
+    }
+
+    // ================= 主界面 =================
+    if root.logged-in: VerticalLayout {
+        spacing: 0;
+
+        // 顶部状态条
+        Rectangle {
+            background: Theme.card;
+            height: 52px;
+            HorizontalLayout {
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                spacing: 10px;
+
+                StatusDot {
+                    on: root.connected;
+                    pending: root.reconnect-attempt > 0;
+                    y: 22px;
+                }
+                Text {
+                    text: root.status-text;
+                    font-size: 13px;
+                    color: root.connected ? Theme.ink : Theme.muted;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: root.page == 0 ? @tr("设置") : @tr("隧道");
+                    clicked => { root.page = root.page == 0 ? 1 : 0; }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.line; }
+
+        // ---- 隧道页 ----
+        if root.page == 0: VerticalLayout {
+            padding: Theme.pad;
+            spacing: 10px;
+
+            if root.tunnels.length == 0 && !root.adding: VerticalLayout {
+                alignment: center;
+                spacing: 10px;
+                Text {
+                    text: @tr("还没有隧道");
+                    font-size: 15px;
+                    color: Theme.ink;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: @tr("新建一条，把本机端口变成一个公网地址");
+                    font-size: 12px;
+                    color: Theme.muted;
+                    horizontal-alignment: center;
+                }
+            }
+
+            if root.tunnels.length > 0: ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 10px;
+                    for t in root.tunnels: TunnelRow {
+                        tunnel: t;
+                        toggle(on) => { root.toggle-tunnel(t.name, on); }
+                        copy => { root.copy-url(t.url); }
+                        show-qr => { root.show-qr(t.url); }
+                        remove => { root.remove-tunnel(t.name); }
+                    }
+                }
+            }
+
+            // 新建表单
+            if root.adding: Card {
+                height: self.preferred-height;
+                VerticalLayout {
+                    padding: Theme.pad;
+                    spacing: 8px;
+                    Text {
+                        text: @tr("新建隧道");
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: Theme.ink;
+                    }
+                    Text {
+                        text: @tr("名字会变成地址的一部分，只能用小写字母、数字和连字符");
+                        font-size: 12px;
+                        color: Theme.muted;
+                        wrap: word-wrap;
+                    }
+                    name-input := LineEdit { placeholder-text: @tr("名字，例如 wx"); }
+                    port-input := LineEdit {
+                        placeholder-text: @tr("本地端口，例如 8082");
+                        input-type: number;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        Button {
+                            text: @tr("取消");
+                            clicked => { root.adding = false; }
+                        }
+                        Button {
+                            text: @tr("创建");
+                            primary: true;
+                            clicked => {
+                                root.add-tunnel(name-input.text, port-input.text.to-float());
+                                name-input.text = "";
+                                port-input.text = "";
+                                root.adding = false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !root.adding: Button {
+                text: @tr("新建隧道");
+                primary: true;
+                clicked => { root.adding = true; }
+            }
+        }
+
+        // ---- 设置页 ----
+        if root.page == 1: ScrollView {
+            VerticalLayout {
+                padding: Theme.pad;
+                spacing: 14px;
+
+                Card {
+                    height: self.preferred-height;
+                    VerticalLayout {
+                        padding: Theme.pad;
+                        spacing: 10px;
+                        HorizontalLayout {
+                            Text {
+                                text: @tr("开机时自动启动");
+                                font-size: 13px;
+                                color: Theme.ink;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            Switch {
+                                checked <=> root.autostart;
+                                toggled => { root.set-autostart(self.checked); }
+                            }
+                        }
+                        Text {
+                            text: @tr("隧道域名后缀：") + root.domain-suffix;
+                            font-size: 12px;
+                            color: Theme.muted;
+                        }
+                    }
+                }
+
+                Card {
+                    height: self.preferred-height;
+                    VerticalLayout {
+                        padding: Theme.pad;
+                        spacing: 10px;
+                        Text {
+                            text: @tr("关于");
+                            font-size: 14px;
+                            font-weight: 600;
+                            color: Theme.ink;
+                        }
+                        Text {
+                            text: @tr("穿云 ") + root.version;
+                            font-size: 12px;
+                            color: Theme.muted;
+                        }
+                        // Slint 的 Royalty-Free 许可要求在「关于」里展示归属
+                        AboutSlint { }
+                    }
+                }
+
+                Button {
+                    text: @tr("退出登录");
+                    clicked => { root.logout(); }
+                }
+            }
+        }
+    }
+
+    // ================= 二维码弹层 =================
+    if root.qr-url != "": Rectangle {
+        background: #00000066;
+        TouchArea { clicked => { root.close-qr(); } }
+
+        Card {
+            width: 280px;
+            height: 340px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+
+            VerticalLayout {
+                padding: Theme.pad;
+                spacing: 10px;
+                alignment: center;
+
+                Text {
+                    text: @tr("用手机扫码打开");
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.ink;
+                    horizontal-alignment: center;
+                }
+                Image {
+                    source: root.qr-image;
+                    width: 200px;
+                    height: 200px;
+                    image-rendering: pixelated;
+                }
+                Text {
+                    text: root.qr-url;
+                    font-size: 11px;
+                    color: Theme.muted;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                Button {
+                    text: @tr("关闭");
+                    clicked => { root.close-qr(); }
+                }
+            }
         }
     }
 }
