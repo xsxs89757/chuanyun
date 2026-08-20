@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: 服务端（Linux 静态二进制）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # rustls 走 ring、rusqlite 走 bundled，musl 下不依赖任何系统库
+      - run: cargo build --release -p cy-server --bin chuanyun-server --target x86_64-unknown-linux-musl
+      - name: 打包
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/chuanyun-server dist/
+          cp deploy/chuanyun-server.service deploy/nginx.conf.example dist/
+          tar czf chuanyun-server-linux-x86_64.tar.gz -C dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: chuanyun-server-linux-x86_64.tar.gz
+
+  macos:
+    name: 客户端（macOS 通用包）
+    # 免费的 x86_64 runner 已经没有了，所以在 arm64 机器上交叉编译两个架构再 lipo 合并。
+    # 只有一台机器，产物路径也更简单。
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/package-mac.sh --universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+
+  windows:
+    name: 客户端（Windows MSI）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # runner 镜像目前自带 WiX 3.14。FireGiant 已经不再支持 v3，
+      # 哪天镜像把它移除了，就在这里加一步显式安装固定版本，或者切到 WiX 4。
+      - run: cargo install cargo-wix --locked
+      - run: cargo wix --package cy-desktop --nocapture
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: target/wix/*.msi
+
+  release:
+    name: 发布
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          body: |
+            ## 安装
+
+            **服务端**：解压 `chuanyun-server-linux-x86_64.tar.gz`，按 [部署文档](docs/部署.md) 配置。
+
+            **客户端**：下载对应系统的安装包。没有购买代码签名证书，第一次打开时——
+
+            - macOS：右键点应用图标 → 打开 → 再点「打开」（直接双击会被拦）
+            - Windows：SmartScreen 提示时点「更多信息」→「仍要运行」
+
+            每台机器做一次就好。

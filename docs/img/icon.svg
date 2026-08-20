@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 穿云 · 应用图标：虚线入云，穿云而出化为实线箭头 -->
+  <rect width="512" height="512" rx="112" fill="#0E7A5A"/>
+  <g transform="translate(22,44) scale(2)">
+    <!-- 入云虚线（画在云后） -->
+    <path d="M10 125.5 L74 117.7" stroke="#FFFFFF" stroke-width="16" stroke-linecap="round" stroke-dasharray="11 15" fill="none"/>
+    <!-- 破云而出的箭头（沿同一轨迹，独立于云） -->
+    <polygon points="226,99.3 198.1,118.8 194.3,87" fill="#FFFFFF"/>
+    <!-- 云（不透明色块，遮住穿行段） -->
+    <g fill="#56A28C">
+      <circle cx="88" cy="120" r="30"/>
+      <circle cx="128" cy="100" r="40"/>
+      <circle cx="165" cy="122" r="28"/>
+      <rect x="88" y="120" width="77" height="30"/>
+    </g>
+  </g>
+</svg>
