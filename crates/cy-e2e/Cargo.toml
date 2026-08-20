@@ -25,3 +25,9 @@ anyhow.workspace = true
 sha2.workspace = true
 hex.workspace = true
 tracing-subscriber.workspace = true
+
+[dependencies]
+cy-core.workspace = true
+cy-server.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

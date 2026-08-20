@@ -1,8 +1,12 @@
 //! 穿云协议层。
 //!
-//! 本 crate 只放**定义**，不做 IO：控制消息、数据流头、错误码、命名规则、版本常量。
-//! 服务端（`cy-server`）与客户端（`cy-core`）各自实现 IO，共用这里的一套语义——
-//! 两者之间没有代码依赖，只通过这份协议对话。
+//! 这里放两端共享的东西：默认只有**定义**（控制消息、数据流头、错误码、命名规则、
+//! 版本常量），两个可选 feature 额外提供传输层的公共管道——`codec` 是控制流的
+//! JSON Lines 编解码，`mux` 是 yamux 驱动。
+//!
+//! 服务端（`cy-server`）与客户端（`cy-core`）之间没有代码依赖，只通过这份协议对话；
+//! 那些两端一模一样的管道代码放在这里共享，而不是各抄一份——并发代码抄两份的下场
+//! 是某天在一边修了 bug、另一边没修。
 //!
 //! # 一条连接长什么样
 //!
@@ -22,6 +26,9 @@ pub mod stream;
 
 #[cfg(feature = "codec")]
 pub mod codec;
+
+#[cfg(feature = "mux")]
+pub mod mux;
 
 pub use control::{ClientMsg, Endpoint, ServerMsg, TunnelKind};
 pub use stream::StreamHeader;

@@ -1288,6 +1288,7 @@ dependencies = [
  "hex",
  "hyper",
  "hyper-util",
+ "rcgen",
  "rustls",
  "rustls-pki-types",
  "serde",
@@ -1301,6 +1302,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "webpki-roots",
  "yamux",
 ]
 
@@ -1346,12 +1348,14 @@ dependencies = [
 name = "cy-proto"
 version = "0.1.0"
 dependencies = [
- "bytes",
  "futures",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
  "tokio-util",
+ "tracing",
+ "yamux",
 ]
 
 [[package]]
@@ -1372,6 +1376,7 @@ dependencies = [
  "rcgen",
  "rusqlite",
  "rustls",
+ "rustls-pemfile",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -5146,6 +5151,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6149,6 +6163,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",
@@ -6854,6 +6869,15 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "url",
  "web-sys",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
