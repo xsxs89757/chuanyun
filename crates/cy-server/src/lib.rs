@@ -6,6 +6,7 @@
 
 pub mod config;
 pub mod control;
+pub mod ingress_http;
 pub mod registry;
 pub mod store;
 pub mod tls;
@@ -45,6 +46,8 @@ pub enum ServerError {
 pub struct ServerHandle {
     /// 控制通道的实际监听地址（配 `:0` 时这里是内核分配的真实端口）
     pub control_addr: SocketAddr,
+    /// HTTP 入口的实际监听地址
+    pub http_addr: SocketAddr,
     /// 控制通道证书指纹，客户端 pin 用
     pub fingerprint: String,
     pub store: Store,
@@ -94,6 +97,19 @@ impl Server {
             source,
         })?;
 
+        let http_listener = tokio::net::TcpListener::bind(config.http.listen)
+            .await
+            .map_err(|source| ServerError::Bind {
+                addr: config.http.listen,
+                source,
+            })?;
+        let http_addr = http_listener
+            .local_addr()
+            .map_err(|source| ServerError::Bind {
+                addr: config.http.listen,
+                source,
+            })?;
+
         let mut tasks = JoinSet::new();
         tasks.spawn(control::serve(
             listener,
@@ -103,15 +119,23 @@ impl Server {
             registry.clone(),
             shutdown.clone(),
         ));
+        tasks.spawn(ingress_http::serve(
+            http_listener,
+            config.clone(),
+            registry.clone(),
+            shutdown.clone(),
+        ));
 
         tracing::info!(
             %control_addr,
+            %http_addr,
             fingerprint = %fingerprint,
-            "控制通道已就绪"
+            "服务端已就绪"
         );
 
         Ok(ServerHandle {
             control_addr,
+            http_addr,
             fingerprint,
             store,
             registry,
