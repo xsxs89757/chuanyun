@@ -3,7 +3,17 @@ all-features = true
 
 [advisories]
 version = 2
-ignore = []
+# 下面两个都是「作者宣布不再维护」的提醒，不是漏洞，而且都是 Slint 拉进来的
+# 传递依赖，我们这边改不动。等 Slint 换掉它们就会自动消失。
+# 每次升级 Slint 之后可以把这两条注释掉试试，能过就删。
+ignore = [
+    # paste：宏辅助库，作者已归档仓库
+    "RUSTSEC-2024-0436",
+    # rustybuzz：文字塑形，Slint 的 femtovg 渲染器在用
+    "RUSTSEC-2026-0206",
+    # ttf-parser：字体解析，同上
+    "RUSTSEC-2026-0192",
+]
 
 [licenses]
 version = 2
@@ -12,7 +22,6 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MIT",
-    "MITNFA",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
@@ -20,61 +29,30 @@ allow = [
     "Unicode-3.0",
     "CDLA-Permissive-2.0",
     "MPL-2.0",
-    "OpenSSL",
+    # Boost 软件许可，宽松无附加义务（arboard 在 Windows 上的剪贴板依赖用它）
+    "BSL-1.0",
+    # 公共领域声明（ksni——Slint 在 Linux 上实现托盘图标用的库）
+    "Unlicense",
+    # BSD 风格（libfuzzer-sys，只在测试依赖里出现，不进产物）
+    "NCSA",
+
+    # Slint 提供「GPLv3 / Royalty-Free / 商业」三选一，我们选 Royalty-Free：
+    # 桌面应用可免费分发（含商用），义务是在「关于」页展示归属（已实现）。
+    # 在这里列出它，等于让依赖审计本身记录下我们选了哪一个——
+    # 而不是笼统地放行 GPL-3.0，那会让人误以为本项目受 GPL 传染。
+    # 详见 THIRD-PARTY.md。
+    "LicenseRef-Slint-Royalty-free-2.0",
 ]
 confidence-threshold = 0.9
 
-# Slint 采用「GPLv3 / Royalty-Free / 商业」三选一。本项目走 Royalty-Free 路线：
-# 桌面应用可免费分发（含商用），义务是在「关于」页展示 AboutSlint 组件作为归属。
-# cargo-deny 只看到 SPDX 里的 GPL-3.0，所以在这里显式豁免并记录选择的理由。
-# 第三方从源码构建时可自行在三者中另作选择。
-[[licenses.exceptions]]
-name = "slint"
-allow = ["GPL-3.0"]
-
-[[licenses.exceptions]]
-name = "slint-build"
-allow = ["GPL-3.0"]
-
-[[licenses.exceptions]]
-name = "slint-macros"
-allow = ["GPL-3.0"]
-
-[[licenses.exceptions]]
-name = "i-slint-core"
-allow = ["GPL-3.0"]
-
-[[licenses.exceptions]]
-name = "i-slint-compiler"
-allow = ["GPL-3.0"]
-
-[[licenses.exceptions]]
-name = "i-slint-common"
-allow = ["GPL-3.0"]
-
-[[licenses.exceptions]]
-name = "i-slint-renderer-femtovg"
-allow = ["GPL-3.0"]
-
-[[licenses.exceptions]]
-name = "i-slint-renderer-skia"
-allow = ["GPL-3.0"]
-
-[[licenses.exceptions]]
-name = "i-slint-backend-winit"
-allow = ["GPL-3.0"]
-
-[[licenses.exceptions]]
-name = "i-slint-backend-selector"
-allow = ["GPL-3.0"]
-
-[[licenses.exceptions]]
-name = "i-slint-core-macros"
-allow = ["GPL-3.0"]
-
 [bans]
+# 依赖树里同一个 crate 出现多个版本很常见（尤其是 GUI 那一大片），
+# 提醒一下就好，不至于拦住构建。
 multiple-versions = "warn"
+# 不写版本号的依赖要拦——除了 workspace 内部互相引用的那几个路径依赖，
+# 它们本来就没有版本可言。
 wildcards = "deny"
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

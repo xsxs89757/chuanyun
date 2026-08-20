@@ -56,17 +56,18 @@ impl Identity {
 
     /// 直接从 PEM 文件加载（直连模式下的正式证书也走这里）。
     pub fn from_pem_files(cert_path: &Path, key_path: &Path) -> Result<Self, TlsError> {
-        let cert_pem = std::fs::read(cert_path)?;
-        let key_pem = std::fs::read(key_path)?;
+        use rustls::pki_types::pem::PemObject;
 
-        let certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut cert_pem.as_slice()).collect::<Result<_, _>>()?;
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)
+            .map_err(|_| TlsError::BadCert(cert_path.to_path_buf()))?
+            .collect::<Result<_, _>>()
+            .map_err(|_| TlsError::BadCert(cert_path.to_path_buf()))?;
         if certs.is_empty() {
             return Err(TlsError::BadCert(cert_path.to_path_buf()));
         }
 
-        let key = rustls_pemfile::private_key(&mut key_pem.as_slice())?
-            .ok_or_else(|| TlsError::BadCert(key_path.to_path_buf()))?;
+        let key = PrivateKeyDer::from_pem_file(key_path)
+            .map_err(|_| TlsError::BadCert(key_path.to_path_buf()))?;
 
         let fingerprint = fingerprint_of(&certs[0]);
         Ok(Self {
