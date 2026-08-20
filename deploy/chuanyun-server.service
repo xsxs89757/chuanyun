@@ -1,0 +1,34 @@
+[Unit]
+Description=穿云内网穿透服务端
+Documentation=https://github.com/chuanyun/chuanyun
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/chuanyun-server run -c /etc/chuanyun/server.toml
+Restart=always
+RestartSec=3
+
+User=chuanyun
+Group=chuanyun
+StateDirectory=chuanyun
+WorkingDirectory=/var/lib/chuanyun
+
+# 数据目录里有自签证书私钥与 SQLite 库，收紧权限
+UMask=0077
+
+# 常规加固：服务端只需要网络与自己的数据目录
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+# 隧道并发连接数可能较多，放宽文件描述符上限
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

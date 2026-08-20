@@ -1,0 +1,81 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+ignore = []
+
+[licenses]
+version = 2
+# 项目本体是 Apache-2.0；依赖只接受同样宽松、可商用的许可。
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MITNFA",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+    "OpenSSL",
+]
+confidence-threshold = 0.9
+
+# Slint 采用「GPLv3 / Royalty-Free / 商业」三选一。本项目走 Royalty-Free 路线：
+# 桌面应用可免费分发（含商用），义务是在「关于」页展示 AboutSlint 组件作为归属。
+# cargo-deny 只看到 SPDX 里的 GPL-3.0，所以在这里显式豁免并记录选择的理由。
+# 第三方从源码构建时可自行在三者中另作选择。
+[[licenses.exceptions]]
+name = "slint"
+allow = ["GPL-3.0"]
+
+[[licenses.exceptions]]
+name = "slint-build"
+allow = ["GPL-3.0"]
+
+[[licenses.exceptions]]
+name = "slint-macros"
+allow = ["GPL-3.0"]
+
+[[licenses.exceptions]]
+name = "i-slint-core"
+allow = ["GPL-3.0"]
+
+[[licenses.exceptions]]
+name = "i-slint-compiler"
+allow = ["GPL-3.0"]
+
+[[licenses.exceptions]]
+name = "i-slint-common"
+allow = ["GPL-3.0"]
+
+[[licenses.exceptions]]
+name = "i-slint-renderer-femtovg"
+allow = ["GPL-3.0"]
+
+[[licenses.exceptions]]
+name = "i-slint-renderer-skia"
+allow = ["GPL-3.0"]
+
+[[licenses.exceptions]]
+name = "i-slint-backend-winit"
+allow = ["GPL-3.0"]
+
+[[licenses.exceptions]]
+name = "i-slint-backend-selector"
+allow = ["GPL-3.0"]
+
+[[licenses.exceptions]]
+name = "i-slint-core-macros"
+allow = ["GPL-3.0"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

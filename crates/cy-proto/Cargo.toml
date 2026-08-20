@@ -1,0 +1,22 @@
+[package]
+name = "cy-proto"
+description = "穿云协议层：控制消息、数据流头、错误码、命名规则"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+# feature `codec` 才需要（服务端/客户端用，纯定义的消费者不需要）
+tokio-util = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+bytes = { version = "1", optional = true }
+
+[features]
+default = []
+codec = ["dep:tokio-util", "dep:futures", "dep:bytes"]

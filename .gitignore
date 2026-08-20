@@ -1,0 +1,24 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# 本地运行产物
+/data
+*.db
+*.db-wal
+*.db-shm
+*.pem
+
+# 私有品牌配置（公司服务器地址、TLS 指纹等，永不入库）
+/brand/*.toml
+!/brand/default.toml
+
+# 打包产物
+/dist
+*.dmg
+*.msi
+*.app
+
+.DS_Store
+.idea/
+.vscode/

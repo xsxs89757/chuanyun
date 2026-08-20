@@ -1,0 +1,16 @@
+import { VerticalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "穿云";
+    preferred-width: 720px;
+    preferred-height: 520px;
+
+    in property <string> status: "未连接";
+
+    VerticalBox {
+        Text {
+            text: root.status;
+            horizontal-alignment: center;
+        }
+    }
+}

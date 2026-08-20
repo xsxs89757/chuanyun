@@ -1,0 +1,39 @@
+[package]
+name = "cy-core"
+description = "穿云客户端核心库：连接管理、隧道引擎、重连、本地 API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cy-proto = { workspace = true, features = ["codec"] }
+
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+yamux.workspace = true
+
+axum.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+directories.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tracing-subscriber.workspace = true

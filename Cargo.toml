@@ -1,0 +1,78 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cy-proto",
+    "crates/cy-core",
+    "crates/cy-server",
+    "crates/cy-desktop",
+    "crates/cy-e2e",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+license = "Apache-2.0"
+repository = "https://github.com/chuanyun/chuanyun"
+authors = ["穿云 contributors"]
+
+[workspace.dependencies]
+cy-proto = { path = "crates/cy-proto" }
+cy-core = { path = "crates/cy-core" }
+cy-server = { path = "crates/cy-server" }
+
+# 异步运行时与 IO
+tokio = { version = "1.53", features = ["rt-multi-thread", "net", "io-util", "macros", "sync", "time", "signal", "fs"] }
+tokio-util = { version = "0.7", features = ["compat", "codec"] }
+futures = "0.3"
+
+# 传输：TLS + 多路复用
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1"
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+yamux = "0.14"
+
+# HTTP
+hyper = { version = "1.11", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto"] }
+http-body-util = "0.1"
+axum = "0.8"
+
+# 存储与序列化
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+
+# 工具
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4.6", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "6"
+governor = "0.10"
+sha2 = "0.10"
+rand = "0.9"
+hex = "0.4"
+time = { version = "0.3", features = ["formatting", "macros"] }
+
+# 桌面端
+slint = "~1.17"
+slint-build = "~1.17"
+auto-launch = "0.6"
+qrcode = "0.14"
+
+# 测试
+# e2e 打的是明文 HTTP ingress（TLS 由前置 nginx 终止），不需要 TLS feature
+reqwest = { version = "0.13", default-features = false, features = ["stream", "json"] }
+tokio-tungstenite = "0.30"
+tempfile = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
