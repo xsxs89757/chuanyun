@@ -204,7 +204,7 @@ async fn user_command(config_path: &std::path::Path, cmd: UserCommand) -> anyhow
                 println!("还没有用户。用 `chuanyun-server user add <名字>` 创建。");
                 return Ok(());
             }
-            println!("{:<16} {:<12} {}", "用户", "状态", "到期");
+            println!("{:<16} {:<12} 到期", "用户", "状态");
             for u in users {
                 let status = if u.revoked_at.is_some() {
                     "已吊销"

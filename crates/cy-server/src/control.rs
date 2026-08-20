@@ -220,9 +220,24 @@ async fn handle_connection(
     .await;
 
     // ---- 清理 ----
+    //
+    // 顺序有讲究：出站通道有好几个克隆（我们手上一个、Session 里一个、
+    // 正在处理请求的 ingress 可能还攥着 Session），必须都放手，写任务才会看到
+    // 通道关闭而退出。漏掉任何一个，这个函数就会一直等在下面那个 await 上，
+    // TLS 连接也就不会释放——对端要等到心跳超时才知道我们已经走了。
+    cancel.cancel();
     registry.unregister(&session_id);
     drop(outbox_tx);
-    let _ = writer.await;
+    drop(session);
+
+    // 即便如此也不能无限等：万一有请求还攥着 Session 的引用，通道就一直不关。
+    // 给一点时间把最后的消息（比如 kick）送出去，然后就该走了。
+    if tokio::time::timeout(Duration::from_millis(500), writer)
+        .await
+        .is_err()
+    {
+        tracing::debug!(session = %session_id, "写任务未在限时内收尾，直接放手");
+    }
     tracing::info!(%user, session = %session_id, "客户端已断开");
 
     result
