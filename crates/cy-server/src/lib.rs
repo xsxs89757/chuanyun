@@ -4,6 +4,7 @@
 //! 句柄。这样集成测试可以让所有监听器都用 `:0` 端口，起真实服务端跑全链路，
 //! 不必预分配端口或猜配置——端口冲突导致的偶发失败是测试里最没意思的一类噪音。
 
+pub mod admin;
 pub mod config;
 pub mod control;
 pub mod ingress_http;
@@ -48,6 +49,8 @@ pub struct ServerHandle {
     pub control_addr: SocketAddr,
     /// HTTP 入口的实际监听地址
     pub http_addr: SocketAddr,
+    /// 管理接口的实际监听地址
+    pub admin_addr: SocketAddr,
     /// 控制通道证书指纹，客户端 pin 用
     pub fingerprint: String,
     pub store: Store,
@@ -110,6 +113,19 @@ impl Server {
                 source,
             })?;
 
+        let admin_listener = tokio::net::TcpListener::bind(config.admin.listen)
+            .await
+            .map_err(|source| ServerError::Bind {
+                addr: config.admin.listen,
+                source,
+            })?;
+        let admin_addr = admin_listener
+            .local_addr()
+            .map_err(|source| ServerError::Bind {
+                addr: config.admin.listen,
+                source,
+            })?;
+
         let mut tasks = JoinSet::new();
         tasks.spawn(control::serve(
             listener,
@@ -125,10 +141,21 @@ impl Server {
             registry.clone(),
             shutdown.clone(),
         ));
+        tasks.spawn(admin::serve(
+            admin_listener,
+            admin::AdminState {
+                store: store.clone(),
+                registry: registry.clone(),
+                fingerprint: fingerprint.clone(),
+                domain_suffix: config.http.domain_suffix.clone(),
+            },
+            shutdown.clone(),
+        ));
 
         tracing::info!(
             %control_addr,
             %http_addr,
+            %admin_addr,
             fingerprint = %fingerprint,
             "服务端已就绪"
         );
@@ -136,6 +163,7 @@ impl Server {
         Ok(ServerHandle {
             control_addr,
             http_addr,
+            admin_addr,
             fingerprint,
             store,
             registry,

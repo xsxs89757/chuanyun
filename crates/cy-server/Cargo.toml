@@ -51,3 +51,4 @@ rustls-pemfile = "2.2.0"
 
 [dev-dependencies]
 tempfile.workspace = true
+tower = "0.5.3"

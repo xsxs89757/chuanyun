@@ -50,6 +50,15 @@ pub async fn serve(
     registry: Arc<Registry>,
     shutdown: CancellationToken,
 ) {
+    // 直连模式：自己终止 TLS。默认走 nginx 前置，证书归 nginx 管，这里就是明文。
+    let acceptor = match load_direct_tls(&config) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::error!(error = %e, "直连模式的证书加载失败，HTTP 入口未启动");
+            return;
+        }
+    };
+
     let ctx = Arc::new(Ctx { config, registry });
 
     loop {
@@ -66,6 +75,7 @@ pub async fn serve(
         let _ = socket.set_nodelay(true);
 
         let ctx = ctx.clone();
+        let acceptor = acceptor.clone();
         tokio::spawn(async move {
             let service = hyper::service::service_fn(move |req| {
                 let ctx = ctx.clone();
@@ -74,14 +84,49 @@ pub async fn serve(
 
             // `with_upgrades` 是 WebSocket 能透传的前提：没有它，101 之后的字节
             // 就没人接管了。
-            if let Err(e) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-                .serve_connection_with_upgrades(TokioIo::new(socket), service)
-                .await
-            {
+            let builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+            let result = match acceptor {
+                Some(acceptor) => match acceptor.accept(socket).await {
+                    Ok(tls) => {
+                        builder
+                            .serve_connection_with_upgrades(TokioIo::new(tls), service)
+                            .await
+                    }
+                    Err(e) => {
+                        tracing::debug!(error = %e, "TLS 握手失败");
+                        return;
+                    }
+                },
+                None => {
+                    builder
+                        .serve_connection_with_upgrades(TokioIo::new(socket), service)
+                        .await
+                }
+            };
+            if let Err(e) = result {
                 tracing::debug!(error = %e, "HTTP 连接结束");
             }
         });
     }
+}
+
+/// 直连模式下加载证书；nginx 前置模式返回 `None`（明文即可）。
+fn load_direct_tls(
+    config: &Config,
+) -> Result<Option<tokio_rustls::TlsAcceptor>, crate::tls::TlsError> {
+    use crate::config::HttpMode;
+
+    if config.http.mode != HttpMode::Direct {
+        return Ok(None);
+    }
+    // validate() 已经确认过 direct 模式下这两项都在
+    let cert = config.http.cert.as_ref().expect("direct 模式必有 cert");
+    let key = config.http.key.as_ref().expect("direct 模式必有 key");
+
+    let identity = crate::tls::Identity::from_pem_files(cert, key)?;
+    Ok(Some(tokio_rustls::TlsAcceptor::from(
+        identity.server_config()?,
+    )))
 }
 
 async fn handle(mut req: Request<Incoming>, peer: SocketAddr, ctx: Arc<Ctx>) -> Response<Body> {
