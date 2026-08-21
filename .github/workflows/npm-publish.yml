@@ -7,6 +7,12 @@ on:
     tags: ["plugin-v*"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  # --provenance 要靠 OIDC 换取签名凭据，少了这条权限发布会直接失败。
+  # 它带来的好处是 npm 页面上会显示「这个包确实由这个仓库的这次提交构建」。
+  id-token: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
