@@ -125,6 +125,10 @@
                                 KeyPath='yes'>
                                 <!-- 有界面的应用得能在开始菜单里找到，
                                      光往 PATH 里塞个 exe 是不够的 -->
+                                <!-- 用普通快捷方式而不是广告式（Advertise='yes'）：
+                                     广告式要求图标的扩展名和组件主文件一致，
+                                     而我们的主文件是 .exe、图标是 .ico，会触发 ICE50。
+                                     普通快捷方式没有这条限制，功能上也没差别。 -->
                                 <Shortcut
                                     Id='StartMenuShortcut'
                                     Directory='ProgramMenuFolder'
@@ -132,7 +136,7 @@
                                     Description='把本机端口变成一个固定的公网地址'
                                     Icon='ProductICO'
                                     WorkingDirectory='Bin'
-                                    Advertise='yes'/>
+                                    Advertise='no'/>
                             </File>
                         </Component>
                     </Directory>
