@@ -361,5 +361,5 @@ location =  /chuanyun/version  { proxy_pass http://127.0.0.1:7001/api/client/ver
 
 The `^~` matters: installers are served from `/chuanyun/download/<filename>`.
 
-The page explains the right-click-to-open dance for unsigned installers, and shows the
+The page explains how to get past Gatekeeper for unsigned installers, and shows the
 domain suffix and certificate fingerprint so colleagues can fill them in themselves.

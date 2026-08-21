@@ -72,7 +72,11 @@ Not comfortable piping a script into a root shell? Read it first — it's one fi
 Download from the [latest release](../../releases/latest). The installers are **not
 code-signed**, so the first launch needs one extra step per machine:
 
-- **macOS** — right-click the app icon → Open → Open. Double-clicking is blocked.
+- **macOS** — double-clicking shows "Apple could not verify...". Click **Done** (*not*
+  "Move to Trash"), then open System Settings → Privacy & Security, scroll to the bottom,
+  and click **Open Anyway**. Or from a terminal:
+  `xattr -dr com.apple.quarantine /Applications/穿云.app`
+  (The old right-click → Open trick stopped working in macOS 15.)
 - **Windows** — on the SmartScreen prompt: "More info" → "Run anyway".
 
 ## Try it without a server

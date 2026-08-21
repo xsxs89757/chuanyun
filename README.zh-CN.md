@@ -55,7 +55,10 @@ curl -fsSL https://github.com/xsxs89757/chuanyun/releases/latest/download/instal
 
 到 [最新发布](../../releases/latest) 下载。安装包**没有代码签名**，第一次打开要多一步，每台机器做一次：
 
-- **macOS**：右键点应用图标 → 打开 → 再点「打开」。直接双击会被拦。
+- **macOS**：双击会弹「Apple 无法验证…」，点**完成**（*别点*「移到废纸篓」），
+  然后到 系统设置 → 隐私与安全性 → 拉到最底下，点**仍要打开**。嫌麻烦就一行命令：
+  `xattr -dr com.apple.quarantine /Applications/穿云.app`
+  （网上常见的「右键 → 打开」从 macOS 15 起已经不管用了。）
 - **Windows**：SmartScreen 提示时点「更多信息」→「仍要运行」。
 
 ## 没有服务器也能先看看

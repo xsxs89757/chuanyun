@@ -262,7 +262,9 @@ async fn download_page(State(s): State<AdminState>) -> Response {
   <h2>第一次打开</h2>
   <p>这个客户端没有购买代码签名证书，所以系统会拦一下：</p>
   <ul>
-    <li><b>macOS</b>：在应用图标上<b>右键</b> → 打开 → 再点「打开」。直接双击会被拦住。</li>
+    <li><b>macOS</b>：双击会弹「Apple 无法验证…」，点<b>完成</b>（别点「移到废纸篓」），再到 <b>系统设置 → 隐私与安全性</b>，拉到最底下点 <b>仍要打开</b>。
+        嫌麻烦就在终端里跑 <code>xattr -dr com.apple.quarantine /Applications/穿云.app</code>。
+        （网上常见的「右键 → 打开」从 macOS 15 起已经不管用了。）</li>
     <li><b>Windows</b>：SmartScreen 提示时点「更多信息」→「仍要运行」。</li>
   </ul>
   <p class="muted">这两步每台机器只需要做一次。</p>

@@ -12,7 +12,11 @@ already baked in — you only need the credential.
 **If the system blocks the first launch**: the app isn't code-signed (a certificate costs a
 few hundred dollars a year, which isn't worth it for an internal tool).
 
-- **macOS** — right-click the icon → Open → Open. Double-clicking is blocked.
+- **macOS** — double-clicking shows "Apple could not verify...". Click **Done** (*not*
+  "Move to Trash"), then open System Settings → Privacy & Security, scroll to the bottom,
+  and click **Open Anyway**. Or from a terminal:
+  `xattr -dr com.apple.quarantine /Applications/穿云.app`
+  (The old right-click → Open trick stopped working in macOS 15.)
 - **Windows** — on the SmartScreen prompt: "More info" → "Run anyway".
 
 Once per machine.

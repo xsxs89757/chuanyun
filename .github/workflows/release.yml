@@ -147,12 +147,16 @@ jobs:
             Download the installer for your system below.
             It is **not code-signed**, so the first launch needs one extra step:
 
-            - **macOS** — right-click the app icon → Open → Open. Double-clicking is blocked.
+            - **macOS** — click **Done** on the "could not verify" dialog (*not* "Move to
+              Trash"), then System Settings → Privacy & Security → **Open Anyway**. Or run
+              `xattr -dr com.apple.quarantine /Applications/穿云.app`.
             - **Windows** — on the SmartScreen prompt, click "More info" → "Run anyway".
 
             Once per machine.
 
-            没有购买代码签名证书，所以第一次打开要多一步：macOS 右键图标 → 打开 → 再点「打开」；
+            没有购买代码签名证书，所以第一次打开要多一步：macOS 在「无法验证」对话框上点「完成」，
+            再去 系统设置 → 隐私与安全性 → 拉到底点「仍要打开」（或者跑
+            `xattr -dr com.apple.quarantine /Applications/穿云.app`）；
             Windows 在 SmartScreen 提示时点「更多信息」→「仍要运行」。每台机器做一次就好。
 
             ## Verify / 校验

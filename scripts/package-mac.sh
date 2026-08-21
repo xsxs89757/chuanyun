@@ -6,7 +6,8 @@
 #   ./scripts/package-mac.sh --universal # Intel + Apple Silicon 通用包，发版用
 #
 # 没有购买 Apple 开发者证书，所以只做 ad-hoc 签名。这能让应用跑起来，
-# 但挡不住首次打开时的 Gatekeeper 提示——用户需要右键打开一次。
+# 但挡不住首次打开时的 Gatekeeper 提示——用户需要去「隐私与安全性」里放行一次
+# （macOS 15 起「右键 → 打开」那条老路已经堵死了）。
 # 下载页上写清楚了这一步。
 set -euo pipefail
 
@@ -84,5 +85,8 @@ rm -rf "$STAGE"
 printf '\n\033[1;32m✓ 打包完成\033[0m\n'
 ls -lh "$DMG" | awk '{print "  " $9 "  " $5}'
 echo
-echo "提醒用户第一次打开时要右键 → 打开（没有开发者签名，双击会被 Gatekeeper 拦）"
+echo "没有开发者签名，第一次打开会被 Gatekeeper 拦。提醒用户："
+echo "  在「无法验证」对话框上点「完成」→ 系统设置 → 隐私与安全性 → 拉到底「仍要打开」"
+echo "  或者跑：xattr -dr com.apple.quarantine /Applications/穿云.app"
+echo "  （macOS 15 起「右键 → 打开」已经不管用了）"
 echo
