@@ -66,16 +66,24 @@ assert_eq!(validate_user("admin"), Err(code::NAME_RESERVED));
 
 ## 验证脚本
 
-单元测试之外还有三个跑真东西的脚本，改动核心链路后值得跑一遍：
+单元测试之外还有四个跑真东西的脚本，改动核心链路后值得跑一遍：
 
 ```bash
-./scripts/demo.sh              # 本机起全套，跑通完整链路
-./scripts/verify-desktop.sh    # 桌面端：自动连接、恢复隧道、本地 API
+./scripts/demo.sh               # 本机起全套，跑通完整链路
+./scripts/verify-desktop.sh     # 桌面端：自动连接、恢复隧道、本地 API
 ./scripts/verify-vite-plugin.sh # 真 Vite 项目经隧道访问
+./scripts/verify-install.sh     # 服务端安装脚本（要 Docker，25 项断言）
 ```
 
-它们不是摆设——`verify-vite-plugin.sh` 抓出过两个单元测试发现不了的 bug
-（本地 API 把 Node 的 fetch 当浏览器挡掉了、Vite 只绑 IPv6 而数据面只连 IPv4）。
+它们不是摆设，每一个都抓出过单元测试发现不了的 bug：
+
+- `verify-vite-plugin.sh`：本地 API 把 Node 的 fetch 当浏览器挡掉了；
+  Vite 只绑 IPv6 而数据面只连 IPv4。
+- `verify-install.sh`：systemd 的 `StateDirectory` 把安装脚本设的 0700
+  覆盖成 0755，同机器其他 ssh 用户能列到私钥目录。
+
+改 `install-server.sh` 一定要跑 `verify-install.sh`。那个脚本是要用 root 在
+别人服务器上执行的，shellcheck 过了不代表它在真发行版上干的事是对的。
 
 ## 现在还没做的
 
