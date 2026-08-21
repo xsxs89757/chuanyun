@@ -297,6 +297,12 @@ chmod 0700 "$DATA_DIR"
 install -m 0644 "$TMP/nginx.conf.example" "$CONF_DIR/nginx.conf.example" 2>/dev/null || true
 
 # ── 配置 ──────────────────────────────────────────────────────────────
+# 公网 IP：云服务器网卡上通常是内网地址，查本地路由得到的是错的，所以问外部。
+# 要赶在写配置之前拿到——客户端要填的地址得写进配置，下载页才显示得出来。
+IP=$(fetch_quick https://api.ipify.org 2>/dev/null || true)
+[ -n "$IP" ] || IP=$(fetch_quick https://4.ipw.cn 2>/dev/null || true)
+[ -n "$IP" ] || IP="你的服务器公网IP"
+
 if [ "$FIRST_INSTALL" = 1 ]; then
     step "写配置"
     cat > "$CONF" <<EOF
@@ -314,6 +320,10 @@ listen = "127.0.0.1:$HTTP_PORT"
 # 客户端出站连这里，这条连接自带 TLS，不经 nginx。
 # 记得在防火墙和云安全组里放行这个端口。
 listen = "0.0.0.0:$CONTROL_PORT"
+# 客户端该填的地址。上面 listen 是绑定地址，不是别人能连的地址，
+# 服务端也猜不到自己的公网名字，所以单独写一份——下载页会把它显示给同事。
+# 有域名的话换成域名更好记，比如 "tunnel.example.com:$CONTROL_PORT"。
+public_addr = "$IP:$CONTROL_PORT"
 
 [admin]
 # 管理接口，只监听回环——服务器上常有多个 ssh 用户，别把它暴露出去。
@@ -358,14 +368,21 @@ if [ "$HAS_SYSTEMD" = 1 ]; then
         systemctl enable "$SVC" >/dev/null 2>&1 || true
         systemctl restart "$SVC"
 
-        # 等它真起来。起不来就直接把日志摆出来，不用用户再去查一遍。
+        # 等它真起来。**不能只看 systemctl is-active**：Type=simple 的服务一 fork
+        # 出来 systemd 就报 active，配上 Restart=always，崩溃重启循环里也会反复
+        # 短暂出现 active——只看它会把崩溃循环当成安装成功报给用户。
+        # 以「管理接口能应答」为准：那说明进程真的把该监听的都监听上了。
         i=0
-        while [ "$i" -lt 25 ]; do
-            systemctl is-active --quiet "$SVC" && break
+        READY=0
+        while [ "$i" -lt 60 ]; do
+            if "$BIN_DIR/chuanyun-server" -c "$CONF" status >/dev/null 2>&1; then
+                READY=1
+                break
+            fi
             i=$((i + 1))
-            sleep 0.2
+            sleep 0.25
         done
-        if systemctl is-active --quiet "$SVC"; then
+        if [ "$READY" = 1 ]; then
             info "已启动，并设为开机自启"
         else
             printf '\n%s✗ 服务没能起来%s\n\n' "$R" "$N"
@@ -393,27 +410,10 @@ fi
 
 SUFFIX=$(sed -n 's/^domain_suffix[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$CONF" | head -1)
 
-# 公网 IP：云服务器的网卡上通常是内网地址，本地路由查出来是错的，所以先问外部。
-IP=$(fetch_quick https://api.ipify.org 2>/dev/null || true)
-if [ -z "$IP" ]; then
-    IP=$(fetch_quick https://4.ipw.cn 2>/dev/null || true)
-fi
-if [ -z "$IP" ]; then
-    IP="你的服务器公网IP"
-fi
-
 FP=""
 if [ "$START" = 1 ] && [ "$HAS_SYSTEMD" = 1 ]; then
-    # 等证书落盘再读。systemctl is-active 对 Type=simple 在进程刚 fork 出来
-    # 就返回 active，那一刻自签证书还没写出去——真机上装出来指纹就是空的，
-    # 把「稍后自己查」推给用户很没必要。
-    i=0
-    while [ "$i" -lt 30 ]; do
-        FP=$("$BIN_DIR/chuanyun-server" -c "$CONF" fingerprint 2>/dev/null || true)
-        [ -n "$FP" ] && break
-        i=$((i + 1))
-        sleep 0.2
-    done
+    # 上面已经等到管理接口应答了，证书这时候必然已经写出来
+    FP=$("$BIN_DIR/chuanyun-server" -c "$CONF" fingerprint 2>/dev/null || true)
 fi
 [ -n "$FP" ] || FP="（服务起来后跑 chuanyun-server fingerprint 查看）"
 

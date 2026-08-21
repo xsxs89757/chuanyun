@@ -161,6 +161,13 @@ impl Server {
                 registry: registry.clone(),
                 fingerprint: fingerprint.clone(),
                 domain_suffix: config.http.domain_suffix.clone(),
+                control_addr: config
+                    .control
+                    .public_addr
+                    .clone()
+                    // 没配就只把端口填上，主机名留给管理员补——
+                    // 瞎猜一个（比如拿 listen 的 0.0.0.0）比不给还糟
+                    .unwrap_or_else(|| format!("你的服务器地址:{}", config.control.listen.port())),
                 download_dir: config
                     .admin
                     .download_dir

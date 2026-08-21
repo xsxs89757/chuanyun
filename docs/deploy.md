@@ -273,6 +273,17 @@ sudo systemctl enable --now chuanyun-server
 control channel on `0.0.0.0:7000`, HTTP ingress on `127.0.0.1:7080`, admin interface on
 `127.0.0.1:7001`.
 
+Worth adding one more: `[control] public_addr` — **the address clients type in**. `listen`
+is a bind address (nobody can connect to `0.0.0.0:7000`), and the server has no way to guess
+its own public name, so it needs to be stated separately for the download page to show it:
+
+```toml
+[control]
+public_addr = "tunnel.example.com:7000"   # or "1.2.3.4:7000"
+```
+
+The install script detects the public IP and fills this in for you.
+
 Without systemd, run it directly: `chuanyun-server -c /etc/chuanyun/server.toml run`.
 
 Then come back to [the four steps](#after-installing-four-steps-left).

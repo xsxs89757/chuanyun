@@ -34,6 +34,8 @@ pub struct AdminState {
     pub domain_suffix: String,
     /// 客户端安装包放在哪。下载页只列出这里实际存在的文件。
     pub download_dir: std::path::PathBuf,
+    /// 展示给客户端填的控制通道地址。
+    pub control_addr: String,
 }
 
 pub async fn serve(
@@ -255,7 +257,7 @@ async fn download_page(State(s): State<AdminState>) -> Response {
 <main>
   <div class="mark">穿云</div>
   <h1>下载客户端</h1>
-  <p class="muted">装好之后输入管理员发给你的凭证就能用，不需要填服务器地址。</p>
+  <p class="muted">装好之后打开，按下面「登录要填什么」把三项填进去。</p>
 
   <div class="row">{}</div>
 
@@ -269,14 +271,19 @@ async fn download_page(State(s): State<AdminState>) -> Response {
   </ul>
   <p class="muted">这两步每台机器只需要做一次。</p>
 
-  <h2>服务器信息</h2>
+  <h2>登录要填什么</h2>
   <p class="muted">
-    隧道域名后缀：<code>{}</code><br>
-    证书指纹：<code>{}</code>
+    <b>服务器</b>：<code>{}</code><br>
+    <b>凭证</b>：管理员单独发给你的那串 <code>cy_...</code>。只发一次，别弄丢——
+    丢了找管理员用 <code>user reissue</code> 重发。<br>
+    <b>证书指纹</b>：<code>{}</code><br>
+    <span style="font-size:.9em">指纹这栏也可以留空：留空就是首次连接时弹窗让你确认，确认后记住。
+    如果装的是公司内部版，服务器和指纹都已经预置好了，只填凭证即可。</span>
   </p>
+  <p class="muted">开出来的地址长这样：<code>你的名字-隧道名.{}</code>，固定不变。</p>
 </main>
 </html>"#,
-        buttons, s.domain_suffix, s.fingerprint
+        buttons, s.control_addr, s.fingerprint, s.domain_suffix
     );
 
     ([("content-type", "text/html; charset=utf-8")], html).into_response()
@@ -381,6 +388,7 @@ mod tests {
             fingerprint: "abc123".into(),
             domain_suffix: "t.example.com".into(),
             download_dir: dir,
+            control_addr: "tunnel.example.com:7000".into(),
         }
     }
 
@@ -482,6 +490,23 @@ mod tests {
         assert!(
             html.contains("href=\"download/chuanyun-0.1.0-macos-universal.dmg\""),
             "链接要用相对路径: {html}"
+        );
+    }
+
+    /// 页面原来写着「不需要填服务器地址」，可开源版必须填；而「服务器信息」里
+    /// 给了域名后缀和指纹，唯独没给要填的那个地址。同事照着页面根本登录不了。
+    #[tokio::test]
+    async fn download_page_tells_you_the_address_to_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state_with_downloads(dir.path().to_path_buf());
+        let (code, html) = body_of(real_app_with(st), "/download").await;
+        assert_eq!(code, StatusCode::OK);
+        assert!(html.contains("tunnel.example.com:7000"), "要写明填哪个地址");
+        assert!(html.contains("abc123"), "指纹也要给");
+        assert!(html.contains("t.example.com"), "隧道地址长什么样也说一下");
+        assert!(
+            !html.contains("不需要填服务器地址"),
+            "这句只对内部版成立，不该无条件写出来"
         );
     }
 

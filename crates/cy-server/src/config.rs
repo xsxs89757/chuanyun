@@ -32,6 +32,13 @@ pub struct Config {
 pub struct ControlConfig {
     #[serde(default = "default_control_listen")]
     pub listen: SocketAddr,
+    /// 客户端该填的地址，比如 `tunnel.example.com:7000`。
+    ///
+    /// `listen` 通常是 `0.0.0.0:7000`，那是绑定地址，不是别人能连的地址；
+    /// 服务端也没法知道自己的公网名字。填了它下载页就能直接把地址显示出来，
+    /// 同事不用再单独问一次。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_addr: Option<String>,
     /// 心跳间隔。客户端据此发 ping，连续 3 次没回应就判定连接已死。
     #[serde(default = "default_heartbeat_secs")]
     pub heartbeat_secs: u64,
@@ -47,6 +54,7 @@ impl Default for ControlConfig {
     fn default() -> Self {
         Self {
             listen: default_control_listen(),
+            public_addr: None,
             heartbeat_secs: default_heartbeat_secs(),
         }
     }
@@ -326,6 +334,31 @@ mod tests {
             err.to_string().contains("domain_sufix"),
             "应指出打错的键: {err}"
         );
+    }
+
+    #[test]
+    fn control_public_addr_is_optional() {
+        let c: Config = toml::from_str(
+            r#"
+            [http]
+            domain_suffix = "t.example.com"
+            [control]
+            public_addr = "tunnel.example.com:7000"
+            "#,
+        )
+        .unwrap();
+        c.validate().unwrap();
+        assert_eq!(c.control.public_addr.unwrap(), "tunnel.example.com:7000");
+        // listen 仍然是绑定地址，两者是两回事
+        let c2: Config = toml::from_str(
+            r#"
+            [http]
+            domain_suffix = "t.example.com"
+            "#,
+        )
+        .unwrap();
+        assert!(c2.control.public_addr.is_none());
+        assert_eq!(c2.control.listen.to_string(), "0.0.0.0:7000");
     }
 
     #[test]

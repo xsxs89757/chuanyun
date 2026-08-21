@@ -131,6 +131,9 @@ check "打出了接下来该做什么" grep -q "还差四步才能用" "$WORK/ou
 check "打出了证书指纹" grep -qE "^     [0-9a-f]{64}$" "$WORK/out.txt"
 
 step "装出来的东西对不对"
+# 单看 systemctl is-active 会把崩溃重启循环当成 active，所以这里等两秒再看一次
+expect "两秒后服务还活着（不是崩溃重启循环）" "active" \
+    inside "sleep 2; systemctl is-active chuanyun-server"
 expect "服务在跑"            "active"      inside "systemctl is-active chuanyun-server"
 expect "设了开机自启"        "enabled"     inside "systemctl is-enabled chuanyun-server"
 expect "以 chuanyun 用户跑"  "chuanyun"    inside "systemctl show -p User --value chuanyun-server"
@@ -140,6 +143,11 @@ expect "别的用户进不去数据目录" "Permission denied" \
 expect "配置写的是给的域名"  "t.example.com" inside "cat /etc/chuanyun/server.toml"
 expect "自定义控制端口进了配置" "0.0.0.0:7100" inside "cat /etc/chuanyun/server.toml"
 expect "自定义管理端口进了配置" "127.0.0.1:7101" inside "cat /etc/chuanyun/server.toml"
+expect "写了客户端该填的地址"   "public_addr" inside "cat /etc/chuanyun/server.toml"
+expect "下载页把该填的地址显示出来" "7100" \
+    inside "curl -s --max-time 8 http://127.0.0.1:7101/download"
+expect "下载页不再说不用填服务器" "登录要填什么" \
+    inside "curl -s --max-time 8 http://127.0.0.1:7101/download"
 expect "管理接口真的听在自定义端口" "1BBD" \
     inside "awk '\$4==\"0A\"{split(\$2,a,\":\");print a[2]}' /proc/net/tcp"
 expect "nginx 样例留在机器上" "nginx.conf.example" inside "ls /etc/chuanyun/"
