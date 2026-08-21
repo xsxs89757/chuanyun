@@ -38,6 +38,9 @@ pub async fn serve(engine: Engine, port: u16) -> std::io::Result<()> {
         .route("/api/tunnels", get(list_tunnels).post(create_tunnels))
         .route("/api/tunnels/{name}", delete(remove_tunnel))
         .route("/api/resolve", get(resolve))
+        .route("/api/requests", get(list_requests).delete(clear_requests))
+        .route("/api/requests/{id}", get(get_request))
+        .route("/api/requests/{id}/replay", post(replay_request))
         .route("/api/shutdown", post(shutdown))
         .layer(axum::middleware::from_fn(guard_local_only))
         .with_state(Arc::new(engine));
@@ -228,6 +231,128 @@ async fn resolve(State(engine): State<Arc<Engine>>, Query(q): Query<ResolveQuery
     Json(Resolved { url, mode }).into_response()
 }
 
+// ================= 请求观测与重放 =================
+
+#[derive(Deserialize)]
+struct RequestQuery {
+    /// 只看某条隧道的记录
+    #[serde(default)]
+    tunnel: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RequestSummary {
+    id: u64,
+    tunnel: String,
+    method: String,
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer: Option<String>,
+    /// Unix 秒
+    at: u64,
+}
+
+fn summarize(r: &crate::inspector::Record) -> RequestSummary {
+    RequestSummary {
+        id: r.id,
+        tunnel: r.tunnel.clone(),
+        method: r.method.clone(),
+        path: r.path.clone(),
+        status: r.status,
+        duration_ms: r.duration.map(|d| d.as_millis()),
+        peer: r.peer.clone(),
+        at: r
+            .at
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    }
+}
+
+async fn list_requests(
+    State(engine): State<Arc<Engine>>,
+    Query(q): Query<RequestQuery>,
+) -> Json<Vec<RequestSummary>> {
+    Json(
+        engine
+            .inspector()
+            .list(q.tunnel.as_deref())
+            .iter()
+            .map(summarize)
+            .collect(),
+    )
+}
+
+#[derive(Serialize)]
+struct RequestDetail {
+    #[serde(flatten)]
+    summary: RequestSummary,
+    headers: Vec<(String, String)>,
+    body: String,
+    body_truncated: usize,
+}
+
+async fn get_request(
+    State(engine): State<Arc<Engine>>,
+    axum::extract::Path(id): axum::extract::Path<u64>,
+) -> Response {
+    match engine.inspector().get(id) {
+        Some(r) => Json(RequestDetail {
+            summary: summarize(&r),
+            headers: r.headers.clone(),
+            body: r.body_text(),
+            body_truncated: r.body_truncated,
+        })
+        .into_response(),
+        None => (StatusCode::NOT_FOUND, "没有这条记录\n").into_response(),
+    }
+}
+
+async fn clear_requests(
+    State(engine): State<Arc<Engine>>,
+    Query(q): Query<RequestQuery>,
+) -> StatusCode {
+    engine.inspector().clear(q.tunnel.as_deref());
+    StatusCode::NO_CONTENT
+}
+
+#[derive(Serialize)]
+struct ReplayResult {
+    status: u16,
+    response: String,
+}
+
+/// 把一条记录原样重发到本地服务。
+///
+/// 支付回调只会推送有限几次，推完就没了。有了这个接口，改一行代码就能
+/// 拿同一份报文（同样的签名、同样的时间戳）再试一次。
+async fn replay_request(
+    State(engine): State<Arc<Engine>>,
+    axum::extract::Path(id): axum::extract::Path<u64>,
+) -> Response {
+    let Some(record) = engine.inspector().get(id) else {
+        return (StatusCode::NOT_FOUND, "没有这条记录\n").into_response();
+    };
+    // 重放要打回原来那条隧道对应的本地端口——记录里存的是隧道名，
+    // 端口可能已经改了，以当前配置为准
+    let Some(port) = engine.status().tunnel(&record.tunnel).map(|t| t.local_port) else {
+        return (
+            StatusCode::CONFLICT,
+            "这条记录所属的隧道已经不在了，没法确定该重放到哪个端口\n",
+        )
+            .into_response();
+    };
+
+    match crate::inspector::replay(&record, port).await {
+        Ok((status, response)) => Json(ReplayResult { status, response }).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("重放失败：{e}\n")).into_response(),
+    }
+}
+
 async fn shutdown(State(engine): State<Arc<Engine>>) -> StatusCode {
     engine.shutdown().await;
     StatusCode::NO_CONTENT
@@ -245,6 +370,9 @@ mod tests {
         Router::new()
             .route("/api/status", get(status))
             .route("/api/resolve", get(resolve))
+            .route("/api/requests", get(list_requests).delete(clear_requests))
+            .route("/api/requests/{id}", get(get_request))
+            .route("/api/requests/{id}/replay", post(replay_request))
             .layer(axum::middleware::from_fn(guard_local_only))
             .with_state(Arc::new(engine))
     }

@@ -18,6 +18,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::backoff::Backoff;
 use crate::client::{self, ConnectError, Connection, CoreConfig, Event, TunnelSpec, Verify};
+use crate::inspector::Inspector;
 use crate::state::State;
 
 /// 对外的状态快照。界面和本地 API 都读它。
@@ -88,6 +89,7 @@ pub struct Engine {
     cmds: mpsc::Sender<Cmd>,
     events: broadcast::Sender<Event>,
     status: Arc<RwLock<Status>>,
+    inspector: Inspector,
 }
 
 impl Engine {
@@ -96,19 +98,28 @@ impl Engine {
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
         let (events, _) = broadcast::channel(256);
         let status = Arc::new(RwLock::new(Status::default()));
+        let inspector = Inspector::new();
 
         let engine = Engine {
             cmds: cmd_tx,
             events: events.clone(),
             status: status.clone(),
+            inspector: inspector.clone(),
         };
 
-        tokio::spawn(supervisor(cmd_rx, events, status, state_path, brand));
+        tokio::spawn(supervisor(
+            cmd_rx, events, status, state_path, brand, inspector,
+        ));
         engine
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.events.subscribe()
+    }
+
+    /// 请求记录本：观测面板和重放都从这里取。
+    pub fn inspector(&self) -> &Inspector {
+        &self.inspector
     }
 
     pub fn status(&self) -> Status {
@@ -192,6 +203,7 @@ async fn supervisor(
     status: Arc<RwLock<Status>>,
     state_path: Option<PathBuf>,
     brand: Brand,
+    inspector: Inspector,
 ) {
     let mut state = match &state_path {
         Some(p) => State::load(p),
@@ -232,7 +244,7 @@ async fn supervisor(
             backoff_max: Duration::from_secs(60),
         };
 
-        match client::connect(&config, events.clone()).await {
+        match client::connect(&config, events.clone(), inspector.clone()).await {
             Ok(conn) => {
                 backoff.reset();
                 if let Some(reply) = login_reply.take() {

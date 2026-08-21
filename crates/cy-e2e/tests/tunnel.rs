@@ -19,7 +19,7 @@ async fn bytes_flow_all_the_way_to_the_local_service() {
     let echo_port = spawn_echo_server().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .expect("客户端应能连上");
 
@@ -64,7 +64,7 @@ async fn duplicate_tunnel_name_is_rejected() {
     let echo_port = spawn_echo_server().await;
     let (events, _rx) = tokio::sync::broadcast::channel(64);
 
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     conn.open_tunnel(TunnelSpec::http("wx", echo_port))
@@ -84,7 +84,7 @@ async fn invalid_tunnel_name_is_rejected() {
     let token = server.add_user("zhangsan").await;
     let (events, _rx) = tokio::sync::broadcast::channel(64);
 
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     let err = conn
@@ -102,7 +102,7 @@ async fn revoked_credentials_are_rejected_with_a_clear_reason() {
     server.store().revoke_user("zhangsan").await.unwrap();
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let err = cy_core::connect(&server.client_config(&token), events)
+    let err = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .expect_err("吊销后不该连得上");
     assert!(err.to_string().contains("吊销"), "实际错误：{err}");
@@ -114,9 +114,13 @@ async fn wrong_token_is_rejected() {
     server.add_user("zhangsan").await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let err = cy_core::connect(&server.client_config("cy_zhangsan_deadbeef"), events)
-        .await
-        .expect_err("错误凭证不该连得上");
+    let err = cy_core::connect(
+        &server.client_config("cy_zhangsan_deadbeef"),
+        events,
+        Default::default(),
+    )
+    .await
+    .expect_err("错误凭证不该连得上");
     assert!(err.to_string().contains("凭证"), "实际错误：{err}");
 }
 
@@ -130,7 +134,7 @@ async fn wrong_fingerprint_is_rejected() {
     config.verify = cy_core::Verify::Pin("00".repeat(32));
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let err = cy_core::connect(&config, events)
+    let err = cy_core::connect(&config, events, Default::default())
         .await
         .expect_err("指纹不符不该连得上");
     assert!(err.to_string().contains("指纹"), "实际错误：{err}");
@@ -144,7 +148,7 @@ async fn kicked_client_learns_why() {
     let echo_port = spawn_echo_server().await;
 
     let (events, mut rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     conn.open_tunnel(TunnelSpec::http("wx", echo_port))
@@ -185,7 +189,7 @@ async fn tunnels_disappear_when_the_client_goes_away() {
     let echo_port = spawn_echo_server().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     conn.open_tunnel(TunnelSpec::http("wx", echo_port))
@@ -215,7 +219,7 @@ async fn missing_local_service_fails_cleanly() {
     };
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     conn.open_tunnel(TunnelSpec::http("dead", dead_port))
@@ -255,7 +259,7 @@ async fn connection_survives_several_heartbeats() {
     let token = server.add_user("zhangsan").await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
 
@@ -275,10 +279,10 @@ async fn multiple_clients_coexist() {
 
     let (ev_a, _ra) = tokio::sync::broadcast::channel(64);
     let (ev_b, _rb) = tokio::sync::broadcast::channel(64);
-    let a = cy_core::connect(&server.client_config(&a_token), ev_a)
+    let a = cy_core::connect(&server.client_config(&a_token), ev_a, Default::default())
         .await
         .unwrap();
-    let b = cy_core::connect(&server.client_config(&b_token), ev_b)
+    let b = cy_core::connect(&server.client_config(&b_token), ev_b, Default::default())
         .await
         .unwrap();
 

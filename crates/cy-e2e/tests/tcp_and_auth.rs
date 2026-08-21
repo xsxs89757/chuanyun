@@ -21,7 +21,7 @@ async fn tcp_tunnel_pipes_raw_bytes() {
     let echo = spawn_echo_server().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
 
@@ -60,7 +60,7 @@ async fn tcp_tunnel_can_request_a_fixed_port() {
     let echo = spawn_echo_server().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
 
@@ -88,7 +88,7 @@ async fn exhausted_port_pool_reports_clearly() {
     let echo = spawn_echo_server().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
 
@@ -114,7 +114,7 @@ async fn closing_a_tcp_tunnel_returns_the_port() {
     let echo = spawn_echo_server().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
 
@@ -147,7 +147,7 @@ async fn disconnecting_frees_tcp_ports() {
     let echo = spawn_echo_server().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     if conn.open_tunnel(TunnelSpec::tcp("db", echo)).await.is_err() {
@@ -184,7 +184,7 @@ async fn password_protected_tunnel_rejects_anonymous() {
     let port = local_hello().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     conn.open_tunnel(TunnelSpec::http("demo", port).with_auth("demo:s3cret"))
@@ -220,7 +220,7 @@ async fn password_protected_tunnel_accepts_correct_credentials() {
     let port = local_hello().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     conn.open_tunnel(TunnelSpec::http("demo", port).with_auth("demo:s3cret"))
@@ -250,7 +250,7 @@ async fn wrong_password_is_rejected() {
     let port = local_hello().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     conn.open_tunnel(TunnelSpec::http("demo", port).with_auth("demo:s3cret"))
@@ -279,7 +279,7 @@ async fn tunnels_without_a_password_stay_open() {
     let port = local_hello().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     conn.open_tunnel(TunnelSpec::http("open", port))

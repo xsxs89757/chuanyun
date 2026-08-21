@@ -177,8 +177,16 @@ impl Connection {
     }
 }
 
-/// 隧道 ID → 本地端口。数据面靠它知道该把流转发到哪。
-type PortMap = Arc<RwLock<HashMap<String, u16>>>;
+/// 数据面要知道的隧道信息。
+#[derive(Debug, Clone)]
+struct Route {
+    local_port: u16,
+    /// 隧道名，只用于把观测记录归类
+    name: String,
+}
+
+/// 隧道 ID → 路由信息。数据面靠它知道该把流转发到哪。
+type PortMap = Arc<RwLock<HashMap<String, Route>>>;
 
 /// 已发出但还没收到回应的开隧道请求：隧道 ID → (名称, 本地端口, 回调)。
 type PendingOpens = HashMap<String, (String, u16, oneshot::Sender<Result<String, String>>)>;
@@ -189,6 +197,7 @@ type PendingOpens = HashMap<String, (String, u16, oneshot::Sender<Result<String,
 pub async fn connect(
     config: &CoreConfig,
     events: broadcast::Sender<Event>,
+    inspector: crate::inspector::Inspector,
 ) -> Result<Connection, ConnectError> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
 
@@ -277,7 +286,12 @@ pub async fn connect(
     let ports: PortMap = Arc::new(RwLock::new(HashMap::new()));
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(32);
 
-    tokio::spawn(data_plane(inbound, ports.clone(), cancel.clone()));
+    tokio::spawn(data_plane(
+        inbound,
+        ports.clone(),
+        inspector,
+        cancel.clone(),
+    ));
     tokio::spawn(control_loop(
         framed,
         cmd_rx,
@@ -366,7 +380,10 @@ async fn control_loop(
                         };
                         if let Some((name, port, reply)) = pending.remove(&id) {
                             // 先登记端口再回复：回复一发出，调用方就可能立刻收到请求了
-                            ports.write().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), port);
+                            ports.write().unwrap_or_else(|e| e.into_inner()).insert(
+                                id.clone(),
+                                Route { local_port: port, name: name.clone() },
+                            );
                             by_name.insert(name.clone(), id);
                             let _ = events.send(Event::TunnelOpened { name, url: url.clone() });
                             let _ = reply.send(Ok(url));
@@ -416,6 +433,7 @@ async fn control_loop(
 async fn data_plane(
     mut inbound: mpsc::Receiver<MuxStream>,
     ports: PortMap,
+    inspector: crate::inspector::Inspector,
     cancel: CancellationToken,
 ) {
     loop {
@@ -428,15 +446,20 @@ async fn data_plane(
         };
 
         let ports = ports.clone();
+        let inspector = inspector.clone();
         tokio::spawn(async move {
-            if let Err(e) = forward(stream, ports).await {
+            if let Err(e) = forward(stream, ports, inspector).await {
                 tracing::debug!(error = %e, "数据流转发结束");
             }
         });
     }
 }
 
-async fn forward(mut stream: MuxStream, ports: PortMap) -> anyhow::Result<()> {
+async fn forward(
+    mut stream: MuxStream,
+    ports: PortMap,
+    inspector: crate::inspector::Inspector,
+) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     // 流头是一行 JSON，读完它剩下的全是裸字节
@@ -448,14 +471,15 @@ async fn forward(mut stream: MuxStream, ports: PortMap) -> anyhow::Result<()> {
     }
     let header = StreamHeader::from_line(line.trim_end())?;
 
-    let port = ports
+    let route = ports
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .get(&header.tunnel_id)
-        .copied();
-    let Some(port) = port else {
+        .cloned();
+    let Some(route) = route else {
         anyhow::bail!("收到未知隧道 {} 的流", header.tunnel_id);
     };
+    let port = route.local_port;
 
     let mut local = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
         Ok(s) => s,
@@ -475,6 +499,174 @@ async fn forward(mut stream: MuxStream, ports: PortMap) -> anyhow::Result<()> {
         local.write_all(&buffered).await?;
     }
 
-    tokio::io::copy_bidirectional(&mut stream, &mut local).await?;
+    // 只观测 HTTP 隧道：TCP 隧道上跑的是什么协议我们无从知晓，
+    // 强行按 HTTP 解析只会记出一堆乱码。
+    if header.kind != TunnelKind::Http {
+        tokio::io::copy_bidirectional(&mut stream, &mut local).await?;
+        return Ok(());
+    }
+
+    // 旁路抓取：不解析、不重组，只是把流过的字节抄一份。
+    // 数据通路仍然是原来那条 copy_bidirectional——观测功能出问题
+    // 最多是记录不全，绝不该让隧道本身传错东西。
+    let request_tap = Tap::new();
+    let response_tap = Tap::new();
+    if !buffered.is_empty() {
+        request_tap.push(&buffered);
+    }
+
+    let started = std::time::Instant::now();
+    let mut tapped_stream = TapIo::new(&mut stream, request_tap.clone());
+    let mut tapped_local = TapIo::new(&mut local, response_tap.clone());
+    let result = tokio::io::copy_bidirectional(&mut tapped_stream, &mut tapped_local).await;
+
+    if let Some(record) = parse_exchange(&request_tap.take(), header.peer.clone()) {
+        let id = inspector.record_request(
+            &route.name,
+            &record.method,
+            &record.path,
+            record.headers,
+            &record.body,
+            header.peer,
+        );
+        if let Some(status) = parse_status(&response_tap.take()) {
+            inspector.record_response(id, status, started.elapsed());
+        }
+    }
+
+    result?;
     Ok(())
+}
+
+/// 抄一份流过的字节，抄到上限就停。
+///
+/// 上限是必须的：一个 100MB 的上传不该在内存里留一份副本。
+#[derive(Clone)]
+struct Tap {
+    buf: Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+/// 单向最多抄这么多。够看清一个回调请求的全貌，又不至于被大文件撑爆。
+const TAP_LIMIT: usize = 512 * 1024;
+
+impl Tap {
+    fn new() -> Self {
+        Self {
+            buf: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    fn push(&self, bytes: &[u8]) {
+        let mut buf = self.buf.lock().unwrap_or_else(|e| e.into_inner());
+        if buf.len() >= TAP_LIMIT {
+            return;
+        }
+        let room = TAP_LIMIT - buf.len();
+        buf.extend_from_slice(&bytes[..bytes.len().min(room)]);
+    }
+
+    fn take(&self) -> Vec<u8> {
+        std::mem::take(&mut *self.buf.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+}
+
+/// 把读到的字节顺手抄进 [`Tap`]，其余行为完全透传。
+struct TapIo<'a, T> {
+    inner: &'a mut T,
+    tap: Tap,
+}
+
+impl<'a, T> TapIo<'a, T> {
+    fn new(inner: &'a mut T, tap: Tap) -> Self {
+        Self { inner, tap }
+    }
+}
+
+impl<T: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for TapIo<'_, T> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let result = std::pin::Pin::new(&mut *self.inner).poll_read(cx, buf);
+        if let std::task::Poll::Ready(Ok(())) = &result {
+            let fresh = &buf.filled()[before..];
+            if !fresh.is_empty() {
+                self.tap.push(fresh);
+            }
+        }
+        result
+    }
+}
+
+impl<T: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for TapIo<'_, T> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut *self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut *self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut *self.inner).poll_shutdown(cx)
+    }
+}
+
+struct Exchange {
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+/// 从抄下来的字节里认出一个 HTTP 请求。
+///
+/// 认不出来就返回 `None`——观测不了不是错误，隧道照常工作。
+fn parse_exchange(raw: &[u8], _peer: Option<String>) -> Option<Exchange> {
+    let split = find_header_end(raw)?;
+    let head = std::str::from_utf8(&raw[..split]).ok()?;
+    let body = raw.get(split + 4..).unwrap_or(&[]).to_vec();
+
+    let mut lines = head.split("\r\n");
+    let mut request_line = lines.next()?.split_whitespace();
+    let method = request_line.next()?.to_string();
+    let path = request_line.next()?.to_string();
+
+    let headers = lines
+        .filter_map(|l| l.split_once(": "))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+    Some(Exchange {
+        method,
+        path,
+        headers,
+        body,
+    })
+}
+
+fn parse_status(raw: &[u8]) -> Option<u16> {
+    let head = raw.get(..raw.len().min(64))?;
+    std::str::from_utf8(head)
+        .ok()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
+fn find_header_end(raw: &[u8]) -> Option<usize> {
+    raw.windows(4).position(|w| w == b"\r\n\r\n")
 }

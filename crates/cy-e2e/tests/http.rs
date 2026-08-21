@@ -91,7 +91,7 @@ async fn setup() -> (TestServer, cy_core::Connection, reqwest::Client, String) {
     let local_port = spawn_local_app().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .expect("客户端连接");
     let url = conn
@@ -243,7 +243,7 @@ async fn websocket_upgrade_and_echo() {
     let local_port = spawn_local_app().await;
 
     let (events, _rx) = tokio::sync::broadcast::channel(64);
-    let conn = cy_core::connect(&server.client_config(&token), events)
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
         .await
         .unwrap();
     conn.open_tunnel(TunnelSpec::http("app", local_port))
@@ -349,10 +349,10 @@ async fn concurrent_tunnels_do_not_cross_talk() {
 
     let (ev_a, _ra) = tokio::sync::broadcast::channel(64);
     let (ev_b, _rb) = tokio::sync::broadcast::channel(64);
-    let a = cy_core::connect(&server.client_config(&a_token), ev_a)
+    let a = cy_core::connect(&server.client_config(&a_token), ev_a, Default::default())
         .await
         .unwrap();
-    let b = cy_core::connect(&server.client_config(&b_token), ev_b)
+    let b = cy_core::connect(&server.client_config(&b_token), ev_b, Default::default())
         .await
         .unwrap();
     a.open_tunnel(TunnelSpec::http("app", a_port))
