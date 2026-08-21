@@ -95,6 +95,21 @@ struct RawRelease {
     notes: String,
 }
 
+/// 把 HTTP 状态码翻成用户看得懂的话。
+///
+/// 403 十有八九是限流：GitHub 对未认证请求按来源 IP 算 60 次/小时，
+/// 一间公司共用一个出口 IP 很容易撞上。甩一个「403 Forbidden」出去，
+/// 用户只会以为是自己没权限。
+fn status_message(status: reqwest::StatusCode) -> String {
+    match status {
+        reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            "GitHub 暂时不让查了（同一个出口 IP 查得太频繁），过一会儿再试".to_string()
+        }
+        reqwest::StatusCode::NOT_FOUND => "查不到发布信息，更新地址可能配错了".to_string(),
+        other => format!("对方返回 {other}"),
+    }
+}
+
 async fn fetch(url: &str) -> Result<Release, UpdateError> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -111,10 +126,7 @@ async fn fetch(url: &str) -> Result<Release, UpdateError> {
         .map_err(|e| UpdateError::Request(e.to_string()))?;
 
     if !response.status().is_success() {
-        return Err(UpdateError::Request(format!(
-            "对方返回 {}",
-            response.status()
-        )));
+        return Err(UpdateError::Request(status_message(response.status())));
     }
 
     let raw: RawRelease = response
@@ -163,6 +175,26 @@ fn parts(v: &str) -> (u32, u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rate_limit_reads_like_a_sentence_not_a_status_code() {
+        // 实测撞到过：一间公司共用出口 IP，未认证请求 60 次/小时很容易用完
+        let msg = super::status_message(reqwest::StatusCode::FORBIDDEN);
+        assert!(msg.contains("过一会儿再试"), "应给出下一步动作: {msg}");
+        assert!(!msg.contains("403"), "不该把状态码甩给用户: {msg}");
+
+        assert_eq!(
+            super::status_message(reqwest::StatusCode::TOO_MANY_REQUESTS),
+            msg,
+            "429 和 403 是同一件事，说法要一致"
+        );
+    }
+
+    #[test]
+    fn unexpected_status_still_says_something() {
+        let msg = super::status_message(reqwest::StatusCode::BAD_GATEWAY);
+        assert!(msg.contains("502"), "没预料到的状态码就把它原样带上: {msg}");
+    }
+
     use super::*;
 
     #[test]

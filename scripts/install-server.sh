@@ -98,14 +98,29 @@ case "$(uname -m)" in
     *) die "不支持的架构：$(uname -m)" ;;
 esac
 
+# 查最新版本走 /releases/latest 的 302 跳转，不走 api.github.com：
+# API 对未认证请求按 IP 限流（60 次/小时），而国内云服务器的出口 IP 常被大量共享，
+# 很容易一上来就撞上 403 rate limit。跳转这条路没有这个限制。
 if command -v curl >/dev/null 2>&1; then
-    fetch()      { curl -fsSL --max-time 60 "$1"; }
-    fetch_file() { curl -fsSL --max-time 300 "$1" -o "$2"; }
+    fetch()       { curl -fsSL --max-time 60 "$1"; }
+    fetch_file()  { curl -fsSL --max-time 300 "$1" -o "$2"; }
     fetch_quick() { curl -fsSL --max-time 3 "$1"; }
+    latest_tag() {
+        u=$(curl -fsSLI -o /dev/null -w '%{url_effective}' --max-time 30 \
+            "https://github.com/$REPO/releases/latest" 2>/dev/null) || return 1
+        case "$u" in */tag/*) echo "${u##*/tag/}" ;; *) return 1 ;; esac
+    }
 elif command -v wget >/dev/null 2>&1; then
-    fetch()      { wget -qO- --timeout=60 "$1"; }
-    fetch_file() { wget -qO "$2" --timeout=300 "$1"; }
+    fetch()       { wget -qO- --timeout=60 "$1"; }
+    fetch_file()  { wget -qO "$2" --timeout=300 "$1"; }
     fetch_quick() { wget -qO- --timeout=3 --tries=1 "$1"; }
+    latest_tag() {
+        u=$(wget -qS --max-redirect=0 --timeout=30 -O /dev/null \
+            "https://github.com/$REPO/releases/latest" 2>&1 \
+            | sed -n 's|.*[Ll]ocation:.*/tag/\([^[:space:]]*\).*|\1|p' | head -1)
+        [ -n "$u" ] || return 1
+        echo "$u"
+    }
 else
     die "需要 curl 或 wget"
 fi
@@ -159,10 +174,12 @@ fi
 step "确认版本"
 if [ -z "$VERSION" ]; then
     [ -z "$BASE_URL" ] || die "用了 CHUANYUN_BASE_URL 就必须同时给 --version（这边查不到有哪些版本）"
-    VERSION=$(fetch "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
-        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1) || true
-    [ -n "$VERSION" ] || die "查不到最新版本（网络不通？）。可以用 --version v0.1.0 指定，
-  版本号看 https://github.com/$REPO/releases"
+    VERSION=$(latest_tag) || true
+    [ -n "$VERSION" ] || die "查不到最新版本。连不上 github.com 的话，可以直接指定版本：
+
+    … | sudo sh -s -- --domain 你的域名 --version v0.1.0
+
+  有哪些版本看 https://github.com/$REPO/releases"
 fi
 NUM="${VERSION#v}"
 TARBALL="chuanyun-server-$NUM-linux-$ARCH.tar.gz"
