@@ -17,7 +17,7 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("用户 {0} 不存在")]
     NoSuchUser(String),
-    #[error("用户 {0} 已存在")]
+    #[error("用户 {0} 已存在。要换一张凭证用 `user reissue {0}`（add 不覆盖已有凭证，免得手一抖把在用的人踢下线）")]
     UserExists(String),
     #[error("域名 {0} 已被其他用户绑定")]
     DomainTaken(String),
@@ -230,6 +230,35 @@ impl Store {
 
     /// 吊销用户。调用方随后应把该用户的活动连接踢掉——吊销要立刻生效，
     /// 不能等到下次握手。
+    /// 给已有用户换一张凭证，同时解除吊销。
+    ///
+    /// 凭证丢了、或者吊销之后又要恢复，都走这里。`add_user` 故意不做这件事：
+    /// 名字打重了就悄悄把在用的人踢下线，代价太大。
+    ///
+    /// 旧凭证立刻失效，但对方的**在线连接**要由调用方去踢（吊销那条路径同理）。
+    pub async fn reissue_token(&self, name: impl Into<String>) -> Result<String, StoreError> {
+        let name = name.into();
+        let token = generate_token(&name);
+        let hash = hash_token(&token);
+        let now = unix_now();
+        let update_name = name.clone();
+
+        self.run(move |conn| {
+            let n = conn.execute(
+                "UPDATE users SET token_sha256 = ?1, created_at = ?2, revoked_at = NULL
+                 WHERE name = ?3",
+                params![hash, now, update_name],
+            )?;
+            if n == 0 {
+                return Err(StoreError::NoSuchUser(update_name));
+            }
+            Ok(())
+        })
+        .await?;
+
+        Ok(token)
+    }
+
     pub async fn revoke_user(&self, name: impl Into<String>) -> Result<(), StoreError> {
         let name = name.into();
         let now = unix_now();
@@ -451,6 +480,70 @@ mod tests {
 
     async fn store() -> Store {
         Store::in_memory().unwrap()
+    }
+
+    /// 凭证只显示一次，丢了必须能重发。原来这条路是断的：add 撞名就报错，
+    /// 而 revoke 之后名字仍然占着，等于这个人永远拿不到新凭证了。
+    #[tokio::test]
+    async fn a_lost_credential_can_be_reissued() {
+        let s = store().await;
+        let old = s.add_user("zhangsan", None, 10).await.unwrap();
+
+        let new = s.reissue_token("zhangsan").await.unwrap();
+        assert_ne!(new, old, "得是一张新的");
+        assert!(new.starts_with("cy_zhangsan_"));
+
+        assert_eq!(
+            s.authenticate(&new).await.unwrap(),
+            Auth::Ok {
+                user: "zhangsan".into(),
+                max_tunnels: 10
+            },
+            "新凭证要能用"
+        );
+        assert!(
+            !matches!(s.authenticate(&old).await.unwrap(), Auth::Ok { .. }),
+            "旧凭证要立刻失效"
+        );
+    }
+
+    /// 吊销之后又要恢复（比如误吊销、或者人回来了）也走同一条路。
+    #[tokio::test]
+    async fn reissue_also_lifts_a_revocation() {
+        let s = store().await;
+        s.add_user("zhangsan", None, 10).await.unwrap();
+        s.revoke_user("zhangsan").await.unwrap();
+
+        let token = s.reissue_token("zhangsan").await.unwrap();
+        assert_eq!(
+            s.authenticate(&token).await.unwrap(),
+            Auth::Ok {
+                user: "zhangsan".into(),
+                max_tunnels: 10
+            },
+            "重新签发应该同时解除吊销"
+        );
+
+        let users = s.list_users().await.unwrap();
+        let u = users.iter().find(|u| u.name == "zhangsan").unwrap();
+        assert!(u.revoked_at.is_none(), "列表里也该显示为正常");
+    }
+
+    #[tokio::test]
+    async fn reissue_needs_an_existing_user() {
+        let s = store().await;
+        let err = s.reissue_token("nobody").await.unwrap_err();
+        assert!(matches!(err, StoreError::NoSuchUser(_)), "{err}");
+    }
+
+    /// add 故意不覆盖已有凭证——名字打重了就把在用的人踢下线，代价太大。
+    /// 但错误信息要告诉你该用哪个命令。
+    #[tokio::test]
+    async fn add_refuses_an_existing_name_and_says_what_to_use() {
+        let s = store().await;
+        s.add_user("zhangsan", None, 10).await.unwrap();
+        let err = s.add_user("zhangsan", None, 10).await.unwrap_err();
+        assert!(err.to_string().contains("reissue"), "该指向 reissue: {err}");
     }
 
     #[tokio::test]

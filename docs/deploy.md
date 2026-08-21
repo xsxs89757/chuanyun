@@ -166,8 +166,15 @@ Two things to watch:
 sudo chuanyun-server user add zhangsan
 ```
 
-The credential is **shown once**. Only a hash is stored, so if it's lost you have to issue a
-new one.
+The credential is **shown once** — only a hash is stored. If it's lost, issue a new one:
+
+```bash
+sudo chuanyun-server user reissue zhangsan
+```
+
+The old credential stops working immediately and the person's live connection is dropped;
+they log in again with the new one. (`user add` refuses an existing name rather than
+overwriting it, so a mistyped name can't knock someone offline.)
 
 Send it to the person along with the **certificate fingerprint**:
 
@@ -191,6 +198,7 @@ If it works, you're done. If not, see [troubleshooting](#troubleshooting).
 chuanyun-server status                # who's online, how many tunnels
 chuanyun-server user list             # who has credentials, and expiry
 chuanyun-server user add <name>       # add someone
+chuanyun-server user reissue <name>   # rotate a credential (lost, or to undo a revoke)
 chuanyun-server user revoke <name>    # revoke (drops their live connection immediately)
 chuanyun-server kick <name>           # disconnect only; the credential stays valid
 chuanyun-server fingerprint           # show the certificate fingerprint again

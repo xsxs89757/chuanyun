@@ -67,6 +67,8 @@ enum UserCommand {
         #[arg(long, default_value_t = 10)]
         max_tunnels: u32,
     },
+    /// 换一张凭证（原来那张立刻失效；已吊销的用户会同时恢复）
+    Reissue { name: String },
     /// 吊销凭证（立刻断开该用户的连接）
     Revoke { name: String },
     /// 列出所有用户
@@ -207,6 +209,23 @@ async fn user_command(config_path: &std::path::Path, cmd: UserCommand) -> anyhow
             println!("  {token}");
             println!();
             println!("凭证在库里只存哈希，丢了只能重新签发。");
+        }
+        UserCommand::Reissue { name } => {
+            let token = store.reissue_token(&name).await?;
+            println!("已给 {name} 换了一张凭证");
+            println!();
+            println!("新凭证（只显示这一次，请立刻发给本人）：");
+            println!("  {token}");
+            println!();
+            println!("原来那张已经失效了。");
+            // 换凭证不影响已经建立的连接（那条连接早就认证过了），
+            // 所以顺手踢一下——不然旧凭证「失效」这件事对在线的人不生效。
+            let config = Config::load(config_path)?;
+            let url = format!("http://{}/kick/{}", config.admin.listen, name);
+            match ureq_post(&url) {
+                Ok(_) => println!("该用户的在线连接已断开，用新凭证重新登录即可。"),
+                Err(_) => println!("（服务端没在跑，下次启动后自然只认新凭证）"),
+            }
         }
         UserCommand::Revoke { name } => {
             store.revoke_user(&name).await?;
