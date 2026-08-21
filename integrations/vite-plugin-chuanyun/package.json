@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-chuanyun",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Expose a Vite dev server through a chuanyun tunnel: registers the port, allows the host, prints the public URL",
   "keywords": [
     "vite-plugin",
