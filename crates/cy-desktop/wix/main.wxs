@@ -86,9 +86,30 @@
         <Property Id='DiskPrompt' Value='穿云 安装程序'/>
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
-            <!-- 引用 ProgramMenuFolder 之前必须先声明它，
-                 否则 light 会报 Unresolved reference to symbol 'Directory:ProgramMenuFolder' -->
-            <Directory Id='ProgramMenuFolder'/>
+            <!-- 开始菜单快捷方式。
+                 有界面的应用得能在开始菜单里找到，光往 PATH 里塞个 exe 是不够的。
+
+                 它必须单独成一个组件、并且用 HKCU 注册表项做 KeyPath：
+                 快捷方式属于「每用户数据」，挂在 exe（每机器数据）那个组件下面
+                 会被 ICE43/ICE57 拦下。这是 MSI 的标准写法，不是绕路。 -->
+            <Directory Id='ProgramMenuFolder'>
+                <Component Id='StartMenuShortcut' Guid='*'>
+                    <Shortcut
+                        Id='AppShortcut'
+                        Name='穿云'
+                        Description='把本机端口变成一个固定的公网地址'
+                        Target='[#exe0]'
+                        WorkingDirectory='Bin'
+                        Icon='ProductICO'/>
+                    <RegistryValue
+                        Root='HKCU'
+                        Key='Software\chuanyun'
+                        Name='installed'
+                        Type='integer'
+                        Value='1'
+                        KeyPath='yes'/>
+                </Component>
+            </Directory>
             <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
                 <Directory Id='APPLICATIONFOLDER' Name='穿云'>
                     <!--
@@ -122,22 +143,7 @@
                                 Name='chuanyun.exe'
                                 DiskId='1'
                                 Source='$(var.CargoTargetBinDir)\chuanyun.exe'
-                                KeyPath='yes'>
-                                <!-- 有界面的应用得能在开始菜单里找到，
-                                     光往 PATH 里塞个 exe 是不够的 -->
-                                <!-- 用普通快捷方式而不是广告式（Advertise='yes'）：
-                                     广告式要求图标的扩展名和组件主文件一致，
-                                     而我们的主文件是 .exe、图标是 .ico，会触发 ICE50。
-                                     普通快捷方式没有这条限制，功能上也没差别。 -->
-                                <Shortcut
-                                    Id='StartMenuShortcut'
-                                    Directory='ProgramMenuFolder'
-                                    Name='穿云'
-                                    Description='把本机端口变成一个固定的公网地址'
-                                    Icon='ProductICO'
-                                    WorkingDirectory='Bin'
-                                    Advertise='no'/>
-                            </File>
+                                KeyPath='yes'/>
                         </Component>
                     </Directory>
                 </Directory>
@@ -158,6 +164,7 @@
               the license sidecar file from the installer.
             -->
             <ComponentRef Id='License'/>
+            <ComponentRef Id='StartMenuShortcut'/>
             
             <ComponentRef Id='binary0'/>
 
