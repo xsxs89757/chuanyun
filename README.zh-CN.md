@@ -88,6 +88,7 @@ git clone https://github.com/xsxs89757/chuanyun.git && cd chuanyun
 |---|---|
 | [部署服务端](docs/部署.md) | 域名解析、nginx 接入、发凭证、排查 |
 | [怎么用](docs/使用.md) | 开隧道、调微信回调、项目接入、本地 API |
+| [运维速查](docs/运维.md) | 日常命令：发凭证、升级、证书、排查 |
 | [品牌注入](brand/README.md) | 怎么打出「同事装上就能登录」的内部版 |
 | [Vite 插件](integrations/vite-plugin-chuanyun/GUIDE.zh-CN.md) | 前端项目一行接入 |
 | [发版](docs/发布.md) | 打 tag、npm 发布、更新检查怎么走 |

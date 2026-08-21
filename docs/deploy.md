@@ -194,6 +194,10 @@ If it works, you're done. If not, see [troubleshooting](#troubleshooting).
 
 ## Day-to-day
 
+Credentials, upgrades, certificates, and troubleshooting have their own page:
+[Operations](operations.md). The essentials:
+
+
 ```bash
 chuanyun-server status                # who's online, how many tunnels
 chuanyun-server user list             # who has credentials, and expiry

@@ -116,6 +116,7 @@ Brings the whole chain up on your own machine — no domain, no nginx, no public
 |---|---|
 | [Deploy the server](docs/deploy.md) | DNS, nginx, credentials, troubleshooting |
 | [Using it](docs/usage.md) | Tunnels, webhooks, project integration, the local API |
+| [Operations](docs/operations.md) | Day-to-day commands: credentials, upgrades, certificates, troubleshooting |
 | [Brand injection](brand/README.md) | Ship an internal build your teammates can just log into *(Chinese)* |
 | [Vite plugin](integrations/vite-plugin-chuanyun/README.md) | One line in a frontend project |
 | [Releasing](docs/发布.md) | Tags, npm publishing, update checks *(Chinese)* |
