@@ -13,6 +13,13 @@
 /brand/*.toml
 !/brand/default.toml
 
+# 凭据：服务器登录信息、密钥、口令。永不入库。
+ssh.txt
+*.key
+id_rsa*
+*credentials*
+*.secret
+
 # 打包产物
 /dist
 *.dmg

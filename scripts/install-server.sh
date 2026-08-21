@@ -27,6 +27,8 @@ BASE_URL="${CHUANYUN_BASE_URL:-}"
 VERSION="${CHUANYUN_VERSION:-}"
 DOMAIN=""
 CONTROL_PORT=7000
+HTTP_PORT=7080
+ADMIN_PORT=7001
 ACTION=install
 START=1
 
@@ -56,7 +58,9 @@ usage() {
 选项：
   --domain <后缀>     隧道域名后缀，如 t.example.com（首次安装必填）
   --version <版本>    装指定版本，如 v0.1.0（默认装最新）
-  --control-port <口> 控制通道端口（默认 7000）
+  --control-port <口> 控制通道端口，客户端连它（默认 7000）
+  --http-port <口>    HTTP 入口，只监听回环，给 nginx 反代（默认 7080）
+  --admin-port <口>   管理接口，只监听回环（默认 7001）
   --no-start          装完不启动
   --uninstall         卸载（数据目录会保留）
   -h, --help          看这段
@@ -73,6 +77,8 @@ while [ $# -gt 0 ]; do
         --domain)        DOMAIN="${2:-}"; shift 2 ;;
         --version)       VERSION="${2:-}"; shift 2 ;;
         --control-port)  CONTROL_PORT="${2:-}"; shift 2 ;;
+        --http-port)     HTTP_PORT="${2:-}"; shift 2 ;;
+        --admin-port)    ADMIN_PORT="${2:-}"; shift 2 ;;
         --no-start)      START=0; shift ;;
         --uninstall)     ACTION=uninstall; shift ;;
         -h|--help)       usage; exit 0 ;;
@@ -170,6 +176,40 @@ if [ "$FIRST_INSTALL" = 1 ] && [ -z "$DOMAIN" ]; then
   https://张三-api.t.example.com。用独立子域，别用主域。"
 fi
 
+# ── 端口预检 ─────────────────────────────────────────────────────────
+# 装完了服务起不来再回头查，不如现在就指名道姓说清楚是哪个端口、被谁占着。
+# 服务器上跑着别的东西是常态：frp 默认就用 7000，docker 常占 7001。
+if [ "$FIRST_INSTALL" = 1 ]; then
+    if command -v ss >/dev/null 2>&1; then
+        listening() { ss -tlnH 2>/dev/null | awk '{print $4}' | grep -q ":$1$"; }
+        who_has()   { ss -tlnpH 2>/dev/null | grep ":$1 " | grep -o '"[^"]*"' | head -1; }
+    elif command -v netstat >/dev/null 2>&1; then
+        listening() { netstat -tln 2>/dev/null | awk '{print $4}' | grep -q ":$1$"; }
+        who_has()   { echo ""; }
+    else
+        # 没有 ss 也没有 netstat 就查不了。不装死：真撞上了服务起不来时
+        # 我们会把 journal 摆出来，那里会写 Address already in use。
+        warn "这台机器上没有 ss / netstat，跳过端口占用预检"
+        listening() { return 1; }
+        who_has()   { echo ""; }
+    fi
+    TAKEN=""
+    for pair in "$CONTROL_PORT|控制通道|--control-port" \
+                "$HTTP_PORT|HTTP 入口|--http-port" \
+                "$ADMIN_PORT|管理接口|--admin-port"; do
+        port=${pair%%|*}; rest=${pair#*|}; name=${rest%%|*}; flag=${rest##*|}
+        if listening "$port"; then
+            by=$(who_has "$port")
+            [ -n "$by" ] || by="别的进程"
+            TAKEN="$TAKEN
+  $port（$name）已经被 $by 占着 —— 换一个：$flag <端口>"
+        fi
+    done
+    if [ -n "$TAKEN" ]; then
+        die "端口冲突。这台机器上什么都还没动：
+$TAKEN"
+    fi
+fi
 # ── 找版本 ────────────────────────────────────────────────────────────
 step "确认版本"
 if [ -z "$VERSION" ]; then
@@ -266,12 +306,16 @@ if [ "$FIRST_INSTALL" = 1 ]; then
 # 需要一条泛解析：*.$DOMAIN → 本机 IP
 domain_suffix = "$DOMAIN"
 # 只监听回环，明文。443 和证书归前置 nginx 管，不跟它抢端口。
-listen = "127.0.0.1:7080"
+listen = "127.0.0.1:$HTTP_PORT"
 
 [control]
 # 客户端出站连这里，这条连接自带 TLS，不经 nginx。
 # 记得在防火墙和云安全组里放行这个端口。
 listen = "0.0.0.0:$CONTROL_PORT"
+
+[admin]
+# 管理接口，只监听回环——服务器上常有多个 ssh 用户，别把它暴露出去。
+listen = "127.0.0.1:$ADMIN_PORT"
 
 [storage]
 data_dir = "$DATA_DIR"
@@ -382,7 +426,8 @@ ${B}2. 防火墙放行控制通道${N}
    ${Y}云服务器还要去控制台的安全组里同样放行，只开 ufw 不够。${N}
 
 ${B}3. nginx 反代${N}
-   服务端只听 127.0.0.1:7080 的明文，443 和证书还是归 nginx。
+   服务端只听 127.0.0.1:$HTTP_PORT 的明文，443 和证书还是归 nginx。
+   反代就指到这个地址。
    样例已经放在这台机器上了：
 
      $CONF_DIR/nginx.conf.example

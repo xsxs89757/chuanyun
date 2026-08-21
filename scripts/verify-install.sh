@@ -67,7 +67,7 @@ cat > "$WORK/Dockerfile" <<'EOF'
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends systemd systemd-sysv curl ca-certificates && \
+    apt-get install -y --no-install-recommends systemd systemd-sysv curl ca-certificates iproute2 && \
     rm -rf /var/lib/apt/lists/* && \
     find /etc/systemd/system /lib/systemd/system -path '*.wants/*' -name '*getty*' -delete
 CMD ["/lib/systemd/systemd"]
@@ -112,8 +112,17 @@ expect "缺 --domain 时说清楚要怎么给" "首次安装要指定隧道域�
 expect "非 root 时提示加 sudo" "需要 root" \
     docker exec cy-verify sh -c "id -u tester >/dev/null 2>&1 || useradd -m tester; su tester -c 'sh /scripts/install-server.sh --domain t.example.com'"
 
+step "端口被占要提前拦下"
+# 容器里 systemd-resolved 占着 53，拿它当「已被占用」的现成样本
+expect "指出是哪个端口被占" "已经被" \
+    run --domain t.example.com --version "$VERSION" --control-port 53
+expect "给出改哪个参数" "--control-port" \
+    run --domain t.example.com --version "$VERSION" --control-port 53
+check "冲突时不碰机器（没装二进制）" inside "test ! -f /usr/local/bin/chuanyun-server"
+
 step "正常安装"
-if run --domain t.example.com --version "$VERSION" >"$WORK/out.txt" 2>&1; then
+if run --domain t.example.com --version "$VERSION" \
+       --control-port 7100 --admin-port 7101 >"$WORK/out.txt" 2>&1; then
     ok "装完退出码 0"
 else
     no "安装失败"; tail -20 "$WORK/out.txt" | awk '{print "      " $0}'
@@ -129,11 +138,15 @@ expect "数据目录 0700"       "drwx------"  inside "ls -ld /var/lib/chuanyun"
 expect "别的用户进不去数据目录" "Permission denied" \
     inside "id -u tester >/dev/null 2>&1 || useradd -m tester; su tester -c 'ls /var/lib/chuanyun/' 2>&1"
 expect "配置写的是给的域名"  "t.example.com" inside "cat /etc/chuanyun/server.toml"
+expect "自定义控制端口进了配置" "0.0.0.0:7100" inside "cat /etc/chuanyun/server.toml"
+expect "自定义管理端口进了配置" "127.0.0.1:7101" inside "cat /etc/chuanyun/server.toml"
+expect "管理接口真的听在自定义端口" "1BBD" \
+    inside "awk '\$4==\"0A\"{split(\$2,a,\":\");print a[2]}' /proc/net/tcp"
 expect "nginx 样例留在机器上" "nginx.conf.example" inside "ls /etc/chuanyun/"
 expect "fingerprint 子命令能用" "^[0-9a-f]\{64\}$" inside "chuanyun-server fingerprint"
 expect "管理接口有响应"      "domain_suffix" inside "chuanyun-server status"
 expect "能发凭证"            "cy_zhangsan_"  inside "chuanyun-server user add zhangsan"
-expect "控制通道在监听"      "1B58" inside "awk '\$4==\"0A\"{split(\$2,a,\":\");print a[2]}' /proc/net/tcp"
+expect "控制通道在监听"      "1BBC" inside "awk '\$4==\"0A\"{split(\$2,a,\":\");print a[2]}' /proc/net/tcp"
 
 step "再跑一次是升级，不是重装"
 run --version "$VERSION" --domain 换个域名.com >"$WORK/up.txt" 2>&1 || true
