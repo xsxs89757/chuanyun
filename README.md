@@ -7,6 +7,7 @@
 [![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Made with Slint](https://img.shields.io/badge/Made%20with-Slint-2379f4)](https://slint.dev)
+[![npm](https://img.shields.io/npm/v/vite-plugin-chuanyun?label=vite-plugin-chuanyun)](https://www.npmjs.com/package/vite-plugin-chuanyun)
 
 </div>
 
