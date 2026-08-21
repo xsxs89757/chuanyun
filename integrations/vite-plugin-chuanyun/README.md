@@ -17,23 +17,23 @@ yarn add -D vite-plugin-chuanyun
 ```
 
 <details>
-<summary>还没发到 npm？也可以直接从 GitHub 装</summary>
+<summary>也可以不经 npm 安装</summary>
 
-pnpm 支持从仓库子目录安装：
+pnpm 支持从仓库子目录直接装：
 
 ```bash
 pnpm add -D "github:xsxs89757/chuanyun#path:/integrations/vite-plugin-chuanyun"
 ```
 
-npm 和 yarn 不支持子目录，得先打个包再装：
+npm 和 yarn 不支持子目录，得先打个包：
 
 ```bash
 git clone https://github.com/xsxs89757/chuanyun.git
 cd chuanyun/integrations/vite-plugin-chuanyun
-npm install && npm pack        # 得到 vite-plugin-chuanyun-0.1.0.tgz
+npm install && npm pack        # 得到 vite-plugin-chuanyun-x.y.z.tgz
 
 cd /你的前端项目
-npm i -D /path/to/vite-plugin-chuanyun-0.1.0.tgz
+npm i -D /path/to/vite-plugin-chuanyun-x.y.z.tgz
 ```
 
 </details>

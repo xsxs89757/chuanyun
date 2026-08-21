@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-chuanyun",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "把 Vite dev server 自动接进穿云隧道：注册端口、放行域名、打印公网地址",
   "keywords": [
     "vite-plugin",
