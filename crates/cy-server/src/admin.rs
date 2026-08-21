@@ -61,12 +61,12 @@ pub async fn serve(
 /// 挡住浏览器发起的请求，以及 Host 不是回环的请求。
 async fn guard_local_only(req: Request, next: Next) -> Response {
     let headers = req.headers();
+    let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
 
-    // 浏览器一定会带这些头之一，curl / 脚本不会。
-    let looks_like_browser = headers.contains_key("origin")
-        || headers.contains_key("sec-fetch-site")
-        || headers.contains_key("sec-fetch-mode");
-    if looks_like_browser {
+    // 绑回环挡不住网页里的 JS，所以另外看请求像不像浏览器发的。
+    // 判定逻辑与服务端管理接口共用一份（cy_proto::guard），
+    // 安全规则各写一遍迟早有一处漏补丁。
+    if cy_proto::guard::looks_like_browser(get) {
         return (
             StatusCode::FORBIDDEN,
             "管理接口不接受来自浏览器的请求。请用命令行工具访问。\n",
@@ -74,16 +74,8 @@ async fn guard_local_only(req: Request, next: Next) -> Response {
             .into_response();
     }
 
-    // DNS rebinding 的特征：解析到了 127.0.0.1，但 Host 里还留着攻击者的域名。
-    let host_ok = headers
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .map(|h| {
-            let name = cy_proto::naming::host_without_port(h);
-            name == "127.0.0.1" || name == "localhost" || name == "[::1]" || name == "::1"
-        })
-        .unwrap_or(false);
-    if !host_ok {
+    // DNS rebinding：域名解析到了 127.0.0.1，但 Host 里还留着攻击者的域名
+    if !cy_proto::guard::host_is_loopback(get("host")) {
         return (
             StatusCode::FORBIDDEN,
             "Host 必须是 127.0.0.1 或 localhost。\n",
@@ -317,8 +309,9 @@ mod tests {
 
     #[tokio::test]
     async fn browser_requests_are_refused() {
-        // 恶意网页里的 fetch 会带 Origin——绑回环挡不住它，这道闸才行
-        for header in ["origin", "sec-fetch-site", "sec-fetch-mode"] {
+        // 恶意网页里的 fetch 会带 Origin 和 Sec-Fetch-Site——绑回环挡不住它，
+        // 这道闸才行。注意不含 sec-fetch-mode：Node 的 fetch 也发那个头。
+        for header in ["origin", "sec-fetch-site"] {
             let req = HttpRequest::builder()
                 .uri("/status")
                 .header("host", "127.0.0.1:7001")
@@ -331,6 +324,27 @@ mod tests {
                 "带 {header} 的请求应被拒"
             );
         }
+    }
+
+    /// Node 的 fetch 会发 `sec-fetch-mode: cors`。
+    ///
+    /// 早先把这个头当浏览器特征，结果所有 Node 脚本都被挡在门外——
+    /// 包括我们自己的 vite 插件。这条守着别再犯。
+    #[tokio::test]
+    async fn node_style_requests_are_allowed() {
+        let req = HttpRequest::builder()
+            .uri("/status")
+            .header("host", "127.0.0.1:7001")
+            .header("sec-fetch-mode", "cors")
+            .header("user-agent", "node")
+            .header("accept", "*/*")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            call(req).await,
+            StatusCode::OK,
+            "脚本调本地接口是这套 API 存在的理由，不能被挡"
+        );
     }
 
     #[tokio::test]

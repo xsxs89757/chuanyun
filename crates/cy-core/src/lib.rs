@@ -19,6 +19,7 @@ pub mod connect;
 pub mod engine;
 pub mod inspector;
 pub mod local_api;
+pub mod localhost;
 pub mod state;
 pub mod verifier;
 

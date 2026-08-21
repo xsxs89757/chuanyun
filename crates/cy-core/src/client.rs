@@ -495,14 +495,14 @@ async fn forward(
     };
     let port = route.local_port;
 
-    let mut local = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+    let mut local = match crate::localhost::connect(port).await {
         Ok(s) => s,
         Err(e) => {
             // 最常见的情况：本地服务还没启动。让这条错误说人话，
             // 用户看到的会是"本地服务未启动"而不是一串 ECONNREFUSED。
             tracing::warn!(port, error = %e, "连接本地服务失败");
             let _ = stream.shutdown().await;
-            anyhow::bail!("本地 127.0.0.1:{port} 连不上（服务没启动，或端口不对）");
+            anyhow::bail!("{}", crate::localhost::unreachable_message(port));
         }
     };
     let _ = local.set_nodelay(true);

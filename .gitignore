@@ -22,3 +22,8 @@
 .DS_Store
 .idea/
 .vscode/
+
+# npm
+node_modules/
+integrations/*/dist/
+integrations/*/package-lock.json

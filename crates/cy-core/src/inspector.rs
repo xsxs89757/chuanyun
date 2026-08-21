@@ -229,7 +229,8 @@ fn redact(headers: Vec<(String, String)>) -> Vec<(String, String)> {
 pub async fn replay(record: &Record, local_port: u16) -> anyhow::Result<(u16, String)> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await?;
+    // 和数据面走同一条路：dev server 可能只绑 IPv6
+    let mut socket = crate::localhost::connect(local_port).await?;
 
     let mut raw = format!("{} {} HTTP/1.1\r\n", record.method, record.path);
     for (k, v) in &record.headers {
