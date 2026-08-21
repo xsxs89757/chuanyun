@@ -61,6 +61,11 @@ pub struct TunnelSpec {
     ///
     /// 只在开隧道时随控制消息上行，服务端只放在内存里——不落库、不写日志。
     pub auth: Option<String>,
+    /// 用自定义域名而不是约定式子域名。
+    ///
+    /// 该域名必须先由管理员登记给本人（`chuanyun-server domain add`），
+    /// 否则谁都能声称自己是 pay.example.com。
+    pub custom_domain: Option<String>,
 }
 
 impl TunnelSpec {
@@ -70,6 +75,7 @@ impl TunnelSpec {
             local_port,
             kind: TunnelKind::Http,
             auth: None,
+            custom_domain: None,
         }
     }
 
@@ -80,6 +86,7 @@ impl TunnelSpec {
             local_port,
             kind: TunnelKind::Tcp,
             auth: None,
+            custom_domain: None,
         }
     }
 
@@ -87,6 +94,13 @@ impl TunnelSpec {
     pub fn with_auth(mut self, auth: impl Into<String>) -> Self {
         let auth = auth.into();
         self.auth = (!auth.is_empty()).then_some(auth);
+        self
+    }
+
+    /// 用一个已登记给自己的自定义域名。
+    pub fn with_domain(mut self, domain: impl Into<String>) -> Self {
+        let domain = domain.into();
+        self.custom_domain = (!domain.is_empty()).then_some(domain);
         self
     }
 }
@@ -341,7 +355,7 @@ async fn control_loop(
                             id: id.clone(),
                             kind: spec.kind,
                             name: spec.name.clone(),
-                            custom_domain: None,
+                            custom_domain: spec.custom_domain.clone(),
                             auth: spec.auth.clone(),
                             remote_port: None,
                         };

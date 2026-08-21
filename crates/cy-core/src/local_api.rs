@@ -38,6 +38,8 @@ pub async fn serve(engine: Engine, port: u16) -> std::io::Result<()> {
         .route("/api/tunnels", get(list_tunnels).post(create_tunnels))
         .route("/api/tunnels/{name}", delete(remove_tunnel))
         .route("/api/resolve", get(resolve))
+        .route("/api/connects", get(list_connects).post(create_connect))
+        .route("/api/connects/{port}", delete(remove_connect))
         .route("/api/requests", get(list_requests).delete(clear_requests))
         .route("/api/requests/{id}", get(get_request))
         .route("/api/requests/{id}/replay", post(replay_request))
@@ -231,6 +233,72 @@ async fn resolve(State(engine): State<Arc<Engine>>, Query(q): Query<ResolveQuery
     Json(Resolved { url, mode }).into_response()
 }
 
+// ================= 接入同事的服务 =================
+
+#[derive(Serialize)]
+struct ConnectBody {
+    local_port: u16,
+    from: String,
+    upstream: String,
+    running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+async fn list_connects(State(engine): State<Arc<Engine>>) -> Json<Vec<ConnectBody>> {
+    Json(
+        engine
+            .status()
+            .connects
+            .into_iter()
+            .map(|c| ConnectBody {
+                local_port: c.local_port,
+                from: c.from,
+                upstream: c.upstream,
+                running: c.running,
+                error: c.error,
+            })
+            .collect(),
+    )
+}
+
+#[derive(Deserialize)]
+struct NewConnect {
+    local_port: u16,
+    /// 隧道名（如 `zhangsan-api`）或完整 URL
+    from: String,
+    #[serde(default)]
+    auth: Option<String>,
+}
+
+async fn create_connect(
+    State(engine): State<Arc<Engine>>,
+    Json(body): Json<NewConnect>,
+) -> Response {
+    let mut spec = crate::connect::ConnectSpec::new(body.local_port, body.from);
+    if let Some(auth) = body.auth {
+        spec = spec.with_auth(auth);
+    }
+    match engine.add_connect(spec).await {
+        Ok(upstream) => {
+            Json(serde_json::json!({ "ok": true, "upstream": upstream })).into_response()
+        }
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+async fn remove_connect(
+    State(engine): State<Arc<Engine>>,
+    axum::extract::Path(port): axum::extract::Path<u16>,
+) -> StatusCode {
+    engine.remove_connect(port).await;
+    StatusCode::NO_CONTENT
+}
+
 // ================= 请求观测与重放 =================
 
 #[derive(Deserialize)]
@@ -370,6 +438,8 @@ mod tests {
         Router::new()
             .route("/api/status", get(status))
             .route("/api/resolve", get(resolve))
+            .route("/api/connects", get(list_connects).post(create_connect))
+            .route("/api/connects/{port}", delete(remove_connect))
             .route("/api/requests", get(list_requests).delete(clear_requests))
             .route("/api/requests/{id}", get(get_request))
             .route("/api/requests/{id}/replay", post(replay_request))

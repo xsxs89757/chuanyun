@@ -18,6 +18,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::backoff::Backoff;
 use crate::client::{self, ConnectError, Connection, CoreConfig, Event, TunnelSpec, Verify};
+use crate::connect::{ActiveConnect, ConnectSpec};
 use crate::inspector::Inspector;
 use crate::state::State;
 
@@ -33,6 +34,19 @@ pub struct Status {
     /// 凭证被拒——这种情况不会自动重连，要用户重新登录
     pub needs_login: bool,
     pub tunnels: Vec<TunnelStatus>,
+    /// 我接入的别人的服务
+    pub connects: Vec<ConnectStatus>,
+}
+
+/// 一条接入的当前状态。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectStatus {
+    pub local_port: u16,
+    pub from: String,
+    /// 补全后的上游地址
+    pub upstream: String,
+    pub running: bool,
+    pub error: Option<String>,
 }
 
 impl Status {
@@ -79,6 +93,14 @@ enum Cmd {
     SetEnabled {
         name: String,
         enabled: bool,
+    },
+    AddConnect {
+        spec: ConnectSpec,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    RemoveConnect {
+        local_port: u16,
+        reply: oneshot::Sender<()>,
     },
     Shutdown,
 }
@@ -183,6 +205,31 @@ impl Engine {
             .await;
     }
 
+    /// 接入同事的服务：把上游映射成本地的一个端口。
+    ///
+    /// 返回补全后的上游地址，方便界面显示"你现在连的是哪儿"。
+    pub async fn add_connect(&self, spec: ConnectSpec) -> Result<String, String> {
+        let (reply, rx) = oneshot::channel();
+        self.cmds
+            .send(Cmd::AddConnect { spec, reply })
+            .await
+            .map_err(|_| "引擎已停止".to_string())?;
+        rx.await.map_err(|_| "引擎已停止".to_string())?
+    }
+
+    /// 停掉一条接入。返回时端口已经放开——调用方可以立刻拿它做别的事。
+    pub async fn remove_connect(&self, local_port: u16) {
+        let (reply, rx) = oneshot::channel();
+        if self
+            .cmds
+            .send(Cmd::RemoveConnect { local_port, reply })
+            .await
+            .is_ok()
+        {
+            let _ = rx.await;
+        }
+    }
+
     pub async fn shutdown(&self) {
         let _ = self.cmds.send(Cmd::Shutdown).await;
     }
@@ -210,6 +257,9 @@ async fn supervisor(
         None => State::default(),
     };
     let mut backoff = Backoff::default();
+    // 接入是纯客户端的事，和连没连上服务端无关——所以它活在 supervisor 这一层，
+    // 不随会话生灭。
+    let mut connects: Vec<ActiveConnect> = Vec::new();
     // 保存待回复的登录请求：连上（或确定连不上）之后才回复，
     // 这样界面上的「登录」按钮能一直转到有结果为止。
     let mut login_reply: Option<oneshot::Sender<Result<(), String>>> = None;
@@ -224,7 +274,15 @@ async fn supervisor(
             match cmds.recv().await {
                 Some(cmd) => {
                     if matches!(
-                        handle_offline_cmd(cmd, &mut state, &state_path, &status, &mut login_reply),
+                        handle_offline_cmd(
+                            cmd,
+                            &mut state,
+                            &state_path,
+                            &status,
+                            &mut login_reply,
+                            &mut connects,
+                        )
+                        .await,
                         CmdOutcome::Stop
                     ) {
                         break;
@@ -258,7 +316,15 @@ async fn supervisor(
                     s.domain_suffix = conn.domain_suffix.clone();
                 });
 
-                let outcome = session(conn, &mut cmds, &mut state, &state_path, &status).await;
+                let outcome = session(
+                    conn,
+                    &mut cmds,
+                    &mut state,
+                    &state_path,
+                    &status,
+                    &mut connects,
+                )
+                .await;
 
                 set_status(&status, |s| {
                     s.connected = false;
@@ -318,8 +384,15 @@ async fn supervisor(
                 _ = tokio::time::sleep_until(deadline) => break,
                 cmd = cmds.recv() => match cmd {
                     Some(cmd) => match handle_offline_cmd(
-                        cmd, &mut state, &state_path, &status, &mut login_reply,
-                    ) {
+                        cmd,
+                        &mut state,
+                        &state_path,
+                        &status,
+                        &mut login_reply,
+                        &mut connects,
+                    )
+                    .await
+                    {
                         CmdOutcome::Stop => return,
                         // 换了凭证，没必要再等——立刻试
                         CmdOutcome::RetryNow => break,
@@ -350,6 +423,7 @@ async fn session(
     state: &mut State,
     state_path: &Option<PathBuf>,
     status: &Arc<RwLock<Status>>,
+    connects: &mut Vec<ActiveConnect>,
 ) -> SessionEnd {
     // 重连之后把期望态里开着的隧道全部重开——用户不该被要求「重新点一次开关」。
     // 单条失败（比如撞名）不影响其余的，失败原因已经记进状态里给界面展示。
@@ -426,6 +500,19 @@ async fn session(
                         save(state, state_path);
                         set_status(status, |s| s.tunnels.retain(|t| t.name != name));
                     }
+                    Cmd::AddConnect { spec, reply } => {
+                        let suffix = status
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .domain_suffix
+                            .clone();
+                        let result = add_connect(spec, &suffix, connects, status).await;
+                        let _ = reply.send(result);
+                    }
+                    Cmd::RemoveConnect { local_port, reply } => {
+                        remove_connect(local_port, connects, status).await;
+                        let _ = reply.send(());
+                    }
                     Cmd::SetEnabled { name, enabled } => {
                         state.set_enabled(&name, enabled);
                         save(state, state_path);
@@ -498,12 +585,13 @@ enum CmdOutcome {
 }
 
 /// 离线时也能执行的命令。
-fn handle_offline_cmd(
+async fn handle_offline_cmd(
     cmd: Cmd,
     state: &mut State,
     state_path: &Option<PathBuf>,
     status: &Arc<RwLock<Status>>,
     login_reply: &mut Option<oneshot::Sender<Result<(), String>>>,
+    connects: &mut Vec<ActiveConnect>,
 ) -> CmdOutcome {
     match cmd {
         Cmd::Shutdown => return CmdOutcome::Stop,
@@ -568,8 +656,86 @@ fn handle_offline_cmd(
                 }
             });
         }
+        Cmd::AddConnect { spec, reply } => {
+            // 接入不需要先登录：上游是个普通的公网地址，本地代理直接就能起。
+            let suffix = status
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .domain_suffix
+                .clone();
+            let result = add_connect(spec, &suffix, connects, status).await;
+            let _ = reply.send(result);
+        }
+        Cmd::RemoveConnect { local_port, reply } => {
+            remove_connect(local_port, connects, status).await;
+            let _ = reply.send(());
+        }
     }
     CmdOutcome::Continue
+}
+
+async fn add_connect(
+    spec: ConnectSpec,
+    domain_suffix: &str,
+    connects: &mut Vec<ActiveConnect>,
+    status: &Arc<RwLock<Status>>,
+) -> Result<String, String> {
+    // 同一个本地端口只能有一条接入——后来的替换先前的。
+    // 这里必须等旧的真的让出端口（remove_connect 内部会等任务退出），
+    // 否则紧接着的 bind 会撞上还没关掉的监听器。
+    remove_connect(spec.local_port, connects, status).await;
+
+    match crate::connect::start(spec.clone(), domain_suffix).await {
+        Ok(active) => {
+            let upstream = active.upstream.clone();
+            connects.push(active);
+            set_status(status, |s| {
+                s.connects.push(ConnectStatus {
+                    local_port: spec.local_port,
+                    from: spec.from.clone(),
+                    upstream: upstream.clone(),
+                    running: true,
+                    error: None,
+                });
+            });
+            Ok(upstream)
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            set_status(status, |s| {
+                s.connects.push(ConnectStatus {
+                    local_port: spec.local_port,
+                    from: spec.from.clone(),
+                    upstream: spec
+                        .upstream_url(domain_suffix)
+                        .unwrap_or_else(|_| spec.from.clone()),
+                    running: false,
+                    error: Some(msg.clone()),
+                });
+            });
+            Err(msg)
+        }
+    }
+}
+
+async fn remove_connect(
+    local_port: u16,
+    connects: &mut Vec<ActiveConnect>,
+    status: &Arc<RwLock<Status>>,
+) {
+    // 逐个停并等它放开端口，不能用 retain——那里面没法 await
+    let mut i = 0;
+    while i < connects.len() {
+        if connects[i].spec.local_port == local_port {
+            let mut c = connects.remove(i);
+            c.stop().await;
+        } else {
+            i += 1;
+        }
+    }
+    set_status(status, |s| {
+        s.connects.retain(|c| c.local_port != local_port);
+    });
 }
 
 fn effective_server(state: &State, brand: &Brand) -> String {

@@ -15,6 +15,7 @@
 pub mod backoff;
 pub mod brand;
 pub mod client;
+pub mod connect;
 pub mod engine;
 pub mod inspector;
 pub mod local_api;
