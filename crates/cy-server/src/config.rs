@@ -205,12 +205,17 @@ fn default_fail_window() -> u64 {
 pub struct AdminConfig {
     #[serde(default = "default_admin_listen")]
     pub listen: SocketAddr,
+    /// 放客户端安装包的目录，下载页从这里取文件。
+    /// 不填就用 `<data_dir>/downloads`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_dir: Option<PathBuf>,
 }
 
 impl Default for AdminConfig {
     fn default() -> Self {
         Self {
             listen: default_admin_listen(),
+            download_dir: None,
         }
     }
 }
@@ -320,6 +325,35 @@ mod tests {
         assert!(
             err.to_string().contains("domain_sufix"),
             "应指出打错的键: {err}"
+        );
+    }
+
+    #[test]
+    fn download_dir_defaults_to_none_and_can_be_set() {
+        let c: Config = toml::from_str(
+            r#"
+            [http]
+            domain_suffix = "t.example.com"
+            "#,
+        )
+        .unwrap();
+        assert!(
+            c.admin.download_dir.is_none(),
+            "不填就是 None，由上层拼默认路径"
+        );
+
+        let c: Config = toml::from_str(
+            r#"
+            [http]
+            domain_suffix = "t.example.com"
+            [admin]
+            download_dir = "/opt/chuanyun/pkgs"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            c.admin.download_dir.unwrap(),
+            PathBuf::from("/opt/chuanyun/pkgs")
         );
     }
 

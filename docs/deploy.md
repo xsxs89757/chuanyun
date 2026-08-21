@@ -123,6 +123,43 @@ certificate paths. Four things matter:
 `/www/server/panel/vhost/nginx/`. Don't edit the site config the panel generates — it
 rewrites that file and your changes disappear.
 
+### Coexisting with an existing frp
+
+Plenty of servers already run frp. The two coexist fine, as long as **chuanyun gets its own
+level of subdomain**.
+
+Say frp has `subDomainHost = example.com`, so it owns `xxx.example.com`. Set chuanyun's
+`domain_suffix` to `t.example.com` and give it its own server block:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name *.t.example.com;      # longer than *.example.com, so nginx prefers it
+    ssl_certificate     /path/to/t.example.com/fullchain.pem;
+    ssl_certificate_key /path/to/t.example.com/privkey.pem;
+    location / { proxy_pass http://127.0.0.1:7080; /* headers as above */ }
+}
+```
+
+nginx matches leading wildcards **longest-first**, so `*.t.example.com` wins over frp's
+`*.example.com`. Only that level reaches chuanyun; everything else still goes to frp.
+
+Two things to watch:
+
+- **Ports.** frp defaults to 7000, which is also chuanyun's default control port. Pass
+  `--control-port` at install time (the installer checks first and tells you if it clashes).
+- **Certificates.** A cert for `*.example.com` does **not** cover `xxx.t.example.com` —
+  wildcards only span one level. Issue a separate one for `*.t.example.com`; wildcards
+  require DNS-01:
+
+  ```bash
+  acme.sh --issue --dns dns_ali -d '*.t.example.com' -d 't.example.com' --server letsencrypt
+  acme.sh --install-cert -d '*.t.example.com' --ecc \
+      --fullchain-file /path/to/t.example.com/fullchain.pem \
+      --key-file       /path/to/t.example.com/privkey.pem \
+      --reloadcmd      "nginx -t && nginx -s reload"
+  ```
+
 ### 4. Issue a credential
 
 ```bash
@@ -286,11 +323,35 @@ ignored — deliberately, because a typo that does nothing is the hardest kind t
 
 ## A download page for your team
 
-The server ships with a download page; drop the installers in and it works:
+The server ships with a download page. Drop installers into the download directory and
+buttons for them appear:
 
-```nginx
-# The admin interface only listens on loopback — proxy a path to it from your internal site
-location /chuanyun/ { proxy_pass http://127.0.0.1:7001/; }
+```bash
+sudo mkdir -p /var/lib/chuanyun/downloads
+sudo cp chuanyun-*.dmg chuanyun-*.msi /var/lib/chuanyun/downloads/
+sudo chown -R chuanyun /var/lib/chuanyun/downloads
 ```
 
-The page already explains the right-click-to-open dance for unsigned installers.
+Only `.dmg`, `.msi`, and `.exe` are recognised; anything else in that directory is neither
+listed nor downloadable. To use a different directory:
+
+```toml
+[admin]
+download_dir = "/opt/chuanyun/pkgs"
+```
+
+The page lives on the admin interface (`127.0.0.1:7001` by default). **Proxy only the two
+download-related paths** — the rest of the admin interface can kick users and list
+credentials and audit logs, so don't expose it:
+
+```nginx
+# The page itself, and the installers
+location ^~ /chuanyun/download { proxy_pass http://127.0.0.1:7001/download; }
+# Client update check (optional)
+location =  /chuanyun/version  { proxy_pass http://127.0.0.1:7001/api/client/version; }
+```
+
+The `^~` matters: installers are served from `/chuanyun/download/<filename>`.
+
+The page explains the right-click-to-open dance for unsigned installers, and shows the
+domain suffix and certificate fingerprint so colleagues can fill them in themselves.

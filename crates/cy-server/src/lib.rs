@@ -161,6 +161,11 @@ impl Server {
                 registry: registry.clone(),
                 fingerprint: fingerprint.clone(),
                 domain_suffix: config.http.domain_suffix.clone(),
+                download_dir: config
+                    .admin
+                    .download_dir
+                    .clone()
+                    .unwrap_or_else(|| config.storage.data_dir.join("downloads")),
             },
             shutdown.clone(),
         ));

@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Request, State};
+use axum::extract::{Path, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -32,6 +32,8 @@ pub struct AdminState {
     pub registry: Arc<Registry>,
     pub fingerprint: String,
     pub domain_suffix: String,
+    /// 客户端安装包放在哪。下载页只列出这里实际存在的文件。
+    pub download_dir: std::path::PathBuf,
 }
 
 pub async fn serve(
@@ -39,16 +41,27 @@ pub async fn serve(
     state: AdminState,
     shutdown: CancellationToken,
 ) {
-    let app = Router::new()
+    // 下载页和版本接口本来就该让浏览器访问：前者是同事拿安装包的地方，
+    // 后者是客户端查更新用的。套上 guard_local_only 它们就永远打不开——
+    // 浏览器必发 Sec-Fetch-Site，经 nginx 反代后 Host 也不是回环地址。
+    // 两个都只读、没有副作用，页面上的证书指纹与域名后缀本来就是要发给同事的。
+    let public = Router::new()
+        .route("/api/client/version", get(client_version))
+        .route("/download", get(download_page))
+        .route("/download/{file}", get(download_file))
+        .with_state(state.clone());
+
+    // 其余接口能踢人、能列用户和审计，仍然只许本机用命令行调。
+    let private = Router::new()
         .route("/status", get(status))
         .route("/tunnels", get(tunnels))
         .route("/users", get(users))
         .route("/kick/{user}", post(kick))
         .route("/audit", get(audit))
-        .route("/api/client/version", get(client_version))
-        .route("/download", get(download_page))
         .layer(axum::middleware::from_fn(guard_local_only))
         .with_state(state);
+
+    let app = public.merge(private);
 
     let server = axum::serve(listener, app).with_graceful_shutdown(async move {
         shutdown.cancelled().await;
@@ -205,6 +218,21 @@ async fn client_version() -> Json<ClientVersion> {
 
 /// 下载页：新同事拿这个链接装客户端。
 async fn download_page(State(s): State<AdminState>) -> Response {
+    let packages = available_packages(&s.download_dir);
+    let buttons = if packages.is_empty() {
+        // 与其摆两个点了 404 的按钮，不如直接说安装包还没放上来
+        format!(
+            "<p class=\"muted\">安装包还没放上来。管理员把 .dmg / .msi 放进 \
+             <code>{}</code> 就会出现在这里。</p>",
+            s.download_dir.display()
+        )
+    } else {
+        packages
+            .iter()
+            .map(|(label, name)| format!("<a class=\"btn\" href=\"download/{name}\">{label}</a>"))
+            .collect::<Vec<_>>()
+            .join("\n    ")
+    };
     let html = format!(
         r#"<!doctype html>
 <html lang="zh-CN">
@@ -229,10 +257,7 @@ async fn download_page(State(s): State<AdminState>) -> Response {
   <h1>下载客户端</h1>
   <p class="muted">装好之后输入管理员发给你的凭证就能用，不需要填服务器地址。</p>
 
-  <div class="row">
-    <a class="btn" href="/download/chuanyun-mac.dmg">macOS</a>
-    <a class="btn" href="/download/chuanyun-windows.msi">Windows</a>
-  </div>
+  <div class="row">{}</div>
 
   <h2>第一次打开</h2>
   <p>这个客户端没有购买代码签名证书，所以系统会拦一下：</p>
@@ -249,10 +274,76 @@ async fn download_page(State(s): State<AdminState>) -> Response {
   </p>
 </main>
 </html>"#,
-        s.domain_suffix, s.fingerprint
+        buttons, s.domain_suffix, s.fingerprint
     );
 
     ([("content-type", "text/html; charset=utf-8")], html).into_response()
+}
+
+/// 下载目录里现有的安装包。
+///
+/// 只认后缀，不递归：这个目录是管理员手动放安装包的地方，不是通用文件服务器。
+fn available_packages(dir: &std::path::Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let label = match name
+            .rsplit_once('.')
+            .map(|(_, ext)| ext.to_ascii_lowercase())
+        {
+            Some(ext) if ext == "dmg" => "macOS",
+            Some(ext) if ext == "msi" || ext == "exe" => "Windows",
+            _ => continue,
+        };
+        out.push((label.to_string(), name));
+    }
+    // 文件名排序，保证每次刷新顺序一致
+    out.sort_by(|a, b| a.1.cmp(&b.1));
+    out
+}
+
+/// 提供下载目录里的一个文件。
+///
+/// 只接受纯文件名：带路径分隔符或 `..` 的一律拒绝，否则这就是一个
+/// 任意文件读取漏洞（`/download/..%2f..%2fetc%2fpasswd`）。
+async fn download_file(State(s): State<AdminState>, Path(file): Path<String>) -> Response {
+    if file.is_empty()
+        || file.contains('/')
+        || file.contains('\\')
+        || file.contains("..")
+        || file.starts_with('.')
+    {
+        return (StatusCode::BAD_REQUEST, "文件名不合法\n").into_response();
+    }
+    // 再核对一遍：只发这个目录里我们愿意列出来的那些文件
+    if !available_packages(&s.download_dir)
+        .iter()
+        .any(|(_, name)| name == &file)
+    {
+        return (StatusCode::NOT_FOUND, "没有这个安装包\n").into_response();
+    }
+
+    let path = s.download_dir.join(&file);
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            [
+                ("content-type", "application/octet-stream".to_string()),
+                (
+                    "content-disposition",
+                    format!("attachment; filename=\"{file}\""),
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "下载页读文件失败");
+            (StatusCode::NOT_FOUND, "没有这个安装包\n").into_response()
+        }
+    }
 }
 
 struct AdminError(crate::store::StoreError);
@@ -278,12 +369,49 @@ mod tests {
     use tower::ServiceExt;
 
     fn state() -> AdminState {
+        state_with_downloads(std::path::PathBuf::from("/nonexistent-downloads"))
+    }
+
+    fn state_with_downloads(dir: std::path::PathBuf) -> AdminState {
         AdminState {
             store: Store::in_memory().unwrap(),
             registry: Arc::new(Registry::new()),
             fingerprint: "abc123".into(),
             domain_suffix: "t.example.com".into(),
+            download_dir: dir,
         }
+    }
+
+    fn real_app_with(st: AdminState) -> Router {
+        let public = Router::new()
+            .route("/api/client/version", get(client_version))
+            .route("/download", get(download_page))
+            .route("/download/{file}", get(download_file))
+            .with_state(st.clone());
+        let private = Router::new()
+            .route("/status", get(status))
+            .route("/tunnels", get(tunnels))
+            .route("/users", get(users))
+            .route("/kick/{user}", post(kick))
+            .route("/audit", get(audit))
+            .layer(axum::middleware::from_fn(guard_local_only))
+            .with_state(st);
+        public.merge(private)
+    }
+
+    async fn body_of(app: Router, uri: &str) -> (StatusCode, String) {
+        let req = HttpRequest::builder()
+            .uri(uri)
+            .header("host", "t.example.com")
+            .header("sec-fetch-site", "none")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
     }
 
     fn app() -> Router {
@@ -291,6 +419,142 @@ mod tests {
             .route("/status", get(status))
             .layer(axum::middleware::from_fn(guard_local_only))
             .with_state(state())
+    }
+
+    /// 和 `serve()` 里一模一样的路由组装。测公开/私有的划分必须用这个，
+    /// 用上面那个简化版会把「下载页有没有被 guard 挡住」这件事测漏。
+    fn real_app() -> Router {
+        real_app_with(state())
+    }
+
+    async fn call_real(req: HttpRequest<Body>) -> StatusCode {
+        real_app().oneshot(req).await.unwrap().status()
+    }
+
+    /// 下载页是给同事用浏览器打开的。它曾经和 /kick 共用同一道 guard，
+    /// 结果浏览器永远 403、经 nginx 反代也 403——真机部署时才发现。
+    #[tokio::test]
+    async fn download_page_opens_in_a_browser_through_nginx() {
+        for uri in ["/download", "/api/client/version"] {
+            let req = HttpRequest::builder()
+                .uri(uri)
+                // 浏览器必发这两个头之一；Host 是 nginx 透传过来的公网域名
+                .header("host", "t.example.com")
+                .header("sec-fetch-site", "none")
+                .header("user-agent", "Mozilla/5.0")
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                call_real(req).await,
+                StatusCode::OK,
+                "{uri} 应该能在浏览器里打开"
+            );
+        }
+    }
+
+    /// 下载页的按钮曾经写死指向 /download/chuanyun-mac.dmg，而根本没有路由
+    /// 提供这些文件——两个按钮点下去都是 404。现在改成列出目录里真有的包。
+    #[tokio::test]
+    async fn download_page_lists_only_packages_that_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("chuanyun-0.1.0-macos-universal.dmg"),
+            b"dmg",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("readme.txt"), "不是安装包").unwrap();
+
+        let st = state_with_downloads(dir.path().to_path_buf());
+        let (code, html) = body_of(real_app_with(st), "/download").await;
+        assert_eq!(code, StatusCode::OK);
+        assert!(
+            html.contains("chuanyun-0.1.0-macos-universal.dmg"),
+            "应列出 dmg"
+        );
+        assert!(!html.contains("readme.txt"), "非安装包不该出现");
+        assert!(
+            !html.contains("chuanyun-windows.msi"),
+            "没有的包不该摆一个死链接"
+        );
+        // 相对路径，这样反代到 /chuanyun/download 这类前缀下也能用
+        assert!(
+            html.contains("href=\"download/chuanyun-0.1.0-macos-universal.dmg\""),
+            "链接要用相对路径: {html}"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_page_says_so_when_nothing_is_uploaded_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = state_with_downloads(dir.path().to_path_buf());
+        let (code, html) = body_of(real_app_with(st), "/download").await;
+        assert_eq!(code, StatusCode::OK);
+        assert!(html.contains("安装包还没放上来"), "该说清楚为什么没有按钮");
+    }
+
+    #[tokio::test]
+    async fn packages_actually_download() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("chuanyun.dmg"), b"\x01\x02\x03").unwrap();
+        let st = state_with_downloads(dir.path().to_path_buf());
+        let (code, body) = body_of(real_app_with(st), "/download/chuanyun.dmg").await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(body.as_bytes(), b"\x01\x02\x03");
+    }
+
+    /// 下载接口是公开的，所以路径穿越会直接变成任意文件读取。
+    #[tokio::test]
+    async fn path_traversal_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ok.dmg"), b"ok").unwrap();
+        for evil in [
+            "../../../../etc/passwd",
+            "..%2f..%2fetc%2fpasswd",
+            "sub/dir.dmg",
+            "..",
+            ".hidden",
+        ] {
+            let st = state_with_downloads(dir.path().to_path_buf());
+            let (code, body) = body_of(real_app_with(st), &format!("/download/{evil}")).await;
+            // 具体是 400 还是 404 不重要（axum 归一化后有些根本匹配不到这条路由，
+            // 会落到带 guard 的那组拿 403）——重要的是绝不能成功。
+            assert!(!code.is_success(), "{evil} 应被拒，实际 {code}");
+            assert!(!body.contains("root:"), "{evil} 读到了 /etc/passwd");
+        }
+    }
+
+    /// 目录里有别的文件也不能顺手下走——只发列得出来的那几个安装包。
+    #[tokio::test]
+    async fn non_package_files_are_not_served() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("secrets.env"), b"TOKEN=xxx").unwrap();
+        let st = state_with_downloads(dir.path().to_path_buf());
+        let (code, _) = body_of(real_app_with(st), "/download/secrets.env").await;
+        assert_eq!(code, StatusCode::NOT_FOUND);
+    }
+
+    /// 摘掉 guard 的只有那两条只读接口，能踢人的仍然只许本机命令行。
+    #[tokio::test]
+    async fn management_endpoints_stay_locked_down() {
+        for (method, uri) in [
+            ("GET", "/status"),
+            ("GET", "/users"),
+            ("GET", "/audit"),
+            ("POST", "/kick/zhangsan"),
+        ] {
+            let req = HttpRequest::builder()
+                .method(method)
+                .uri(uri)
+                .header("host", "t.example.com")
+                .header("sec-fetch-site", "none")
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                call_real(req).await,
+                StatusCode::FORBIDDEN,
+                "{method} {uri} 不该让浏览器碰到"
+            );
+        }
     }
 
     async fn call(req: HttpRequest<Body>) -> StatusCode {
