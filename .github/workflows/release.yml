@@ -58,10 +58,12 @@ jobs:
       # runner 镜像目前自带 WiX 3.14。FireGiant 已经不再支持 v3，
       # 哪天镜像把它移除了，就在这里加一步显式安装固定版本，或者切到 WiX 4。
       - run: cargo install cargo-wix --locked
-      # 必须在包目录里跑：main.wxs 里的 SourceFile 写的是相对路径
-      # （wix\License.rtf、wix\Product.ico），WiX 按当前目录去找它们。
-      # 在仓库根目录跑的话会去找 <root>/wix/…，那里什么都没有。
-      - run: cargo wix --nocapture
+      # 两个条件缺一不可：
+      # - 在包目录里跑：main.wxs 里的 SourceFile 是相对路径（wix\License.rtf、
+      #   wix\Product.ico），WiX 按当前目录找它们；在仓库根目录跑会去找
+      #   <root>/wix/，那里什么都没有
+      # - 带 --package：cargo-wix 认出这是 workspace，不指定包名就拒绝干活
+      - run: cargo wix --package cy-desktop --nocapture
         working-directory: crates/cy-desktop
       - uses: actions/upload-artifact@v4
         with:
