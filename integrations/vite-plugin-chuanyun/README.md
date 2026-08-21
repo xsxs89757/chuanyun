@@ -1,6 +1,6 @@
 # vite-plugin-chuanyun
 
-[English](README.md) · [中文](README.zh-CN.md)
+[English](README.md) · [中文](https://github.com/xsxs89757/chuanyun/blob/main/integrations/vite-plugin-chuanyun/GUIDE.zh-CN.md)
 
 Expose a Vite dev server through a [chuanyun](https://github.com/xsxs89757/chuanyun) tunnel,
 automatically.

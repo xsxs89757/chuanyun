@@ -1,6 +1,6 @@
 # vite-plugin-chuanyun
 
-[English](README.md) · [中文](README.zh-CN.md)
+[English](README.md) · [中文](GUIDE.zh-CN.md)
 
 把 Vite 的 dev server 自动接进[穿云](https://github.com/xsxs89757/chuanyun)隧道。
 
