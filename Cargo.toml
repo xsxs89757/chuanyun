@@ -13,7 +13,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
 license = "Apache-2.0"
-repository = "https://github.com/chuanyun/chuanyun"
+repository = "https://github.com/xsxs89757/chuanyun"
 authors = ["穿云 contributors"]
 
 [workspace.dependencies]
