@@ -47,6 +47,7 @@ sha2.workspace = true
 rand.workspace = true
 hex.workspace = true
 time.workspace = true
+base64 = "0.23.1"
 
 [dev-dependencies]
 tempfile.workspace = true

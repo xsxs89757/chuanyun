@@ -40,6 +40,8 @@ pub struct Tunnel {
     pub kind: TunnelKind,
     /// 访问口令（`user:pass`），入口处校验；`None` 表示不设防
     pub auth: Option<String>,
+    /// TCP 隧道占用的公网端口。关闭隧道时要还回池子。
+    pub tcp_port: Option<u16>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -146,6 +148,33 @@ impl Registry {
     }
 
     /// HTTP 入口的路由查询。
+    /// 记下这条隧道借到的公网端口。
+    pub fn set_tcp_port(&self, host: &str, port: u16) {
+        let host = host.to_ascii_lowercase();
+        if let Some(t) = self.write().hosts.get_mut(&host) {
+            t.tcp_port = Some(port);
+        }
+    }
+
+    /// 某条隧道占用的公网端口（TCP 隧道才有）。
+    pub fn tcp_port_of(&self, session_id: &str, tunnel_id: &str) -> Option<u16> {
+        self.read()
+            .hosts
+            .values()
+            .find(|t| t.session.id == session_id && t.tunnel_id == tunnel_id)
+            .and_then(|t| t.tcp_port)
+    }
+
+    /// 某个会话占用的所有公网端口。会话结束时要一并归还。
+    pub fn tcp_ports_of_session(&self, session_id: &str) -> Vec<u16> {
+        self.read()
+            .hosts
+            .values()
+            .filter(|t| t.session.id == session_id)
+            .filter_map(|t| t.tcp_port)
+            .collect()
+    }
+
     pub fn lookup(&self, host: &str) -> Option<Tunnel> {
         self.read().hosts.get(&host.to_ascii_lowercase()).cloned()
     }
@@ -225,6 +254,7 @@ mod tests {
             name: name.into(),
             kind: TunnelKind::Http,
             auth: None,
+            tcp_port: None,
         }
     }
 

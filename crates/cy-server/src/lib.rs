@@ -8,6 +8,7 @@ pub mod admin;
 pub mod config;
 pub mod control;
 pub mod ingress_http;
+pub mod ingress_tcp;
 pub mod registry;
 pub mod store;
 pub mod tls;
@@ -22,6 +23,7 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use ingress_tcp::PortPool;
 use registry::Registry;
 
 /// 服务端版本，握手时告诉客户端。
@@ -55,6 +57,7 @@ pub struct ServerHandle {
     pub fingerprint: String,
     pub store: Store,
     pub registry: Arc<Registry>,
+    pub ports: Arc<PortPool>,
     shutdown: CancellationToken,
     tasks: JoinSet<()>,
 }
@@ -86,6 +89,15 @@ impl Server {
         let tls_config = identity.server_config()?;
 
         let registry = Arc::new(Registry::new());
+        let ports = Arc::new(PortPool::new(
+            config.tcp.port_range,
+            // 没配 public_host 就退回域名后缀——总比让用户看到 "0.0.0.0:20017" 强
+            if config.tcp.public_host.is_empty() {
+                config.http.domain_suffix.clone()
+            } else {
+                config.tcp.public_host.clone()
+            },
+        ));
         let shutdown = CancellationToken::new();
         let config = Arc::new(config);
 
@@ -133,6 +145,7 @@ impl Server {
             config.clone(),
             store.clone(),
             registry.clone(),
+            ports.clone(),
             shutdown.clone(),
         ));
         tasks.spawn(ingress_http::serve(
@@ -167,6 +180,7 @@ impl Server {
             fingerprint,
             store,
             registry,
+            ports,
             shutdown,
             tasks,
         })

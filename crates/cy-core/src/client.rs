@@ -57,6 +57,10 @@ pub struct TunnelSpec {
     pub name: String,
     pub local_port: u16,
     pub kind: TunnelKind,
+    /// 访问口令，`用户名:口令` 形式；`None` 表示不设防。
+    ///
+    /// 只在开隧道时随控制消息上行，服务端只放在内存里——不落库、不写日志。
+    pub auth: Option<String>,
 }
 
 impl TunnelSpec {
@@ -65,7 +69,25 @@ impl TunnelSpec {
             name: name.into(),
             local_port,
             kind: TunnelKind::Http,
+            auth: None,
         }
+    }
+
+    /// TCP 隧道：服务端从公网端口池里分配一个端口。
+    pub fn tcp(name: impl Into<String>, local_port: u16) -> Self {
+        Self {
+            name: name.into(),
+            local_port,
+            kind: TunnelKind::Tcp,
+            auth: None,
+        }
+    }
+
+    /// 给这条隧道加访问口令。
+    pub fn with_auth(mut self, auth: impl Into<String>) -> Self {
+        let auth = auth.into();
+        self.auth = (!auth.is_empty()).then_some(auth);
+        self
     }
 }
 
@@ -306,7 +328,7 @@ async fn control_loop(
                             kind: spec.kind,
                             name: spec.name.clone(),
                             custom_domain: None,
-                            auth: None,
+                            auth: spec.auth.clone(),
                             remote_port: None,
                         };
                         if sink.send(msg).await.is_err() {

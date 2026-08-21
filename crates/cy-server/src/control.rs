@@ -21,6 +21,7 @@ use tokio_util::codec::Framed;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
+use crate::ingress_tcp::{LeaseError, PortPool};
 use crate::registry::{OpenOutcome, Registry, Session, Tunnel};
 use crate::store::{action, AuditEvent, Auth, Store};
 
@@ -39,6 +40,7 @@ pub async fn serve(
     config: Arc<Config>,
     store: Store,
     registry: Arc<Registry>,
+    ports: Arc<PortPool>,
     shutdown: CancellationToken,
 ) {
     let acceptor = tokio_rustls::TlsAcceptor::from(tls);
@@ -68,6 +70,7 @@ pub async fn serve(
         let config = config.clone();
         let store = store.clone();
         let registry = registry.clone();
+        let ports = ports.clone();
         let failures = failures.clone();
         let shutdown = shutdown.clone();
 
@@ -79,6 +82,7 @@ pub async fn serve(
                 config,
                 store,
                 registry,
+                ports,
                 failures,
                 shutdown,
             )
@@ -98,6 +102,7 @@ async fn handle_connection(
     config: Arc<Config>,
     store: Store,
     registry: Arc<Registry>,
+    ports: Arc<PortPool>,
     failures: Arc<FailureTracker>,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
@@ -211,6 +216,7 @@ async fn handle_connection(
         &outbox_tx,
         &session,
         &registry,
+        &ports,
         &store,
         &config,
         max_tunnels,
@@ -226,6 +232,11 @@ async fn handle_connection(
     // 通道关闭而退出。漏掉任何一个，这个函数就会一直等在下面那个 await 上，
     // TLS 连接也就不会释放——对端要等到心跳超时才知道我们已经走了。
     cancel.cancel();
+    // 先收端口再注销：注销之后就查不到这个会话占了哪些端口，
+    // 那些监听器会一直挂着，池子慢慢就漏光了。
+    for port in registry.tcp_ports_of_session(&session_id) {
+        ports.release(port);
+    }
     registry.unregister(&session_id);
     drop(outbox_tx);
     drop(session);
@@ -249,6 +260,7 @@ async fn message_loop<S>(
     outbox: &tokio::sync::mpsc::Sender<ServerMsg>,
     session: &Arc<Session>,
     registry: &Arc<Registry>,
+    ports: &Arc<PortPool>,
     store: &Store,
     config: &Config,
     max_tunnels: u32,
@@ -302,17 +314,20 @@ where
                     ClientMsg::Ping { seq } => {
                         let _ = outbox.send(ServerMsg::Pong { seq }).await;
                     }
-                    ClientMsg::OpenTunnel { id, kind, name, custom_domain, auth, .. } => {
+                    ClientMsg::OpenTunnel { id, kind, name, custom_domain, auth, remote_port } => {
                         // 客户端有消息进来就说明它还活着，不必等 pong
                         unanswered = 0;
                         let reply = open_tunnel(
-                            &id, kind, &name, custom_domain, auth,
-                            session, registry, store, config, max_tunnels,
+                            &id, kind, &name, custom_domain, auth, remote_port,
+                            session, registry, ports, store, config, max_tunnels,
                         ).await;
                         let _ = outbox.send(reply).await;
                     }
                     ClientMsg::CloseTunnel { id } => {
                         unanswered = 0;
+                        if let Some(port) = registry.tcp_port_of(&session.id, &id) {
+                            ports.release(port);
+                        }
                         if let Some(host) = registry.close_tunnel(&session.id, &id) {
                             store.audit(
                                 AuditEvent::new(&session.user, action::CLOSE).tunnel(&id, &host)
@@ -338,8 +353,10 @@ async fn open_tunnel(
     name: &str,
     custom_domain: Option<String>,
     auth: Option<String>,
+    remote_port: Option<u16>,
     session: &Arc<Session>,
     registry: &Arc<Registry>,
+    ports: &Arc<PortPool>,
     store: &Store,
     config: &Config,
     max_tunnels: u32,
@@ -352,17 +369,24 @@ async fn open_tunnel(
         id: Some(id.to_string()),
     };
 
-    if kind == TunnelKind::Tcp {
-        // TCP 隧道排在 V1.5；现在明确拒绝，好过让客户端拿到一个不通的地址
-        return ServerMsg::Error {
-            code: code::INTERNAL.into(),
-            message: "当前版本还不支持 TCP 隧道".into(),
-            id: Some(id.to_string()),
-        };
-    }
-
     if let Err(c) = cy_proto::naming::validate_name(name) {
         return fail(c);
+    }
+
+    if kind == TunnelKind::Tcp {
+        return open_tcp_tunnel(
+            id,
+            name,
+            auth,
+            remote_port,
+            session,
+            registry,
+            ports,
+            store,
+            config,
+            max_tunnels,
+        )
+        .await;
     }
 
     // 自定义域名必须事先由管理员登记给这个用户，否则谁都能声称自己是 pay.example.com
@@ -387,6 +411,7 @@ async fn open_tunnel(
         name: name.to_string(),
         kind,
         auth,
+        tcp_port: None,
     };
 
     match registry.open_tunnel(&host, tunnel, max_tunnels) {
@@ -403,6 +428,83 @@ async fn open_tunnel(
         }
         OpenOutcome::Taken => fail(code::SUBDOMAIN_TAKEN),
         OpenOutcome::LimitReached => fail(code::LIMIT),
+    }
+}
+
+/// 开一条 TCP 隧道：借一个公网端口，谁连上那个端口就转给这个客户端。
+///
+/// 和 HTTP 隧道不同，TCP 没有 Host 这种带内信息可以复用一个端口，所以
+/// 一条隧道独占一个端口——池子有多大就最多能开多少条。
+#[allow(clippy::too_many_arguments)]
+async fn open_tcp_tunnel(
+    id: &str,
+    name: &str,
+    auth: Option<String>,
+    remote_port: Option<u16>,
+    session: &Arc<Session>,
+    registry: &Arc<Registry>,
+    ports: &Arc<PortPool>,
+    store: &Store,
+    config: &Config,
+    max_tunnels: u32,
+) -> ServerMsg {
+    use cy_proto::error::code;
+
+    let fail = |c: &str| ServerMsg::Error {
+        code: c.to_string(),
+        message: cy_proto::error::human(c).to_string(),
+        id: Some(id.to_string()),
+    };
+
+    // TCP 隧道也占一个「主机名」槽位，好让它和 HTTP 隧道共用同一套
+    // 命名、限额与清理逻辑。这个名字不会被解析，只是内部的键。
+    let host_key = cy_proto::naming::host_for(&session.user, name, &config.http.domain_suffix);
+
+    // 先占住名字再借端口：反过来的话，撞名时借到的端口要再还回去，
+    // 中间那一小段时间里池子是虚耗的。
+    let tunnel = Tunnel {
+        session: session.clone(),
+        tunnel_id: id.to_string(),
+        name: name.to_string(),
+        kind: TunnelKind::Tcp,
+        auth,
+        tcp_port: None,
+    };
+    match registry.open_tunnel(&host_key, tunnel, max_tunnels) {
+        OpenOutcome::Opened => {}
+        OpenOutcome::Taken => return fail(code::SUBDOMAIN_TAKEN),
+        OpenOutcome::LimitReached => return fail(code::LIMIT),
+    }
+
+    match ports
+        .lease(
+            remote_port,
+            id.to_string(),
+            host_key.clone(),
+            registry.clone(),
+        )
+        .await
+    {
+        Ok((port, addr)) => {
+            registry.set_tcp_port(&host_key, port);
+            tracing::info!(user = %session.user, %addr, "TCP 隧道已开通");
+            store
+                .audit(AuditEvent::new(&session.user, action::OPEN).tunnel(name, &addr))
+                .await;
+            ServerMsg::TunnelOpened {
+                id: id.to_string(),
+                public: Endpoint::Addr(addr),
+            }
+        }
+        Err(e) => {
+            // 端口没借到，把刚占的名字还回去，别留一条永远不通的隧道
+            registry.close_tunnel(&session.id, id);
+            fail(match e {
+                LeaseError::Exhausted => code::POOL_EXHAUSTED,
+                LeaseError::Taken | LeaseError::BindFailed => code::PORT_TAKEN,
+                LeaseError::OutOfRange => code::PORT_TAKEN,
+            })
+        }
     }
 }
 

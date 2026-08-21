@@ -149,6 +149,14 @@ async fn handle(mut req: Request<Incoming>, peer: SocketAddr, ctx: Arc<Ctx>) -> 
         );
     };
 
+    // 隧道设了口令就先过这一关。校验放在开数据流之前——没通过的请求
+    // 根本不该打扰到用户的本地服务。
+    if let Some(expected) = &tunnel.auth {
+        if !basic_auth_ok(&req, expected) {
+            return unauthorized();
+        }
+    }
+
     let client_ip = real_client_ip(&req, peer.ip(), &ctx.config);
     set_forwarded_headers(&mut req, client_ip, &ctx.config);
 
@@ -265,6 +273,56 @@ fn set_forwarded_headers<B>(req: &mut Request<B>, client_ip: IpAddr, config: &Co
     }
     // Host 保持原样：本地服务看到的是隧道域名，它据此生成的绝对地址才是对的。
     // 前端 dev server 的 allowedHosts 检查也依赖这一点。
+}
+
+/// 校验 Basic 认证头是否匹配隧道设置的口令。
+///
+/// 期望值是 `用户名:口令` 的明文形式——它由隧道所有者在客户端上设置、只存在于
+/// 内存里，不落库也不写日志。
+fn basic_auth_ok<B>(req: &Request<B>, expected: &str) -> bool {
+    use base64::Engine as _;
+
+    let Some(header) = req
+        .headers()
+        .get(hyper::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(encoded) = header
+        .strip_prefix("Basic ")
+        .or_else(|| header.strip_prefix("basic "))
+    else {
+        return false;
+    };
+    let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded.trim()) else {
+        return false;
+    };
+
+    // 常量时间比较：口令是秘密，别让比较耗时泄露前缀对了几位
+    constant_time_eq(&decoded, expected.as_bytes())
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// 401 + 认证质询，浏览器会据此弹出输入框。
+fn unauthorized() -> Response<Body> {
+    let mut resp = error_page(
+        StatusCode::UNAUTHORIZED,
+        "需要口令",
+        "这条隧道设置了访问口令。向隧道的主人要一份，或者让他关掉口令保护。",
+    );
+    resp.headers_mut().insert(
+        hyper::header::WWW_AUTHENTICATE,
+        // realm 里不要放隧道名之类的信息——这个头在没通过认证时就会发出去
+        HeaderValue::from_static("Basic realm=\"chuanyun\", charset=\"UTF-8\""),
+    );
+    resp
 }
 
 fn error_page(status: StatusCode, title: &str, detail: &str) -> Response<Body> {
@@ -394,5 +452,82 @@ mod tests {
             "no-store",
             "隧道随时可能重开，错误页被缓存住会很难解释"
         );
+    }
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+    use base64::Engine as _;
+
+    fn req_with_auth(header: Option<&str>) -> Request<()> {
+        let mut b = Request::builder().uri("/").header(HOST, "a.t.example.com");
+        if let Some(h) = header {
+            b = b.header(hyper::header::AUTHORIZATION, h);
+        }
+        b.body(()).unwrap()
+    }
+
+    fn basic(creds: &str) -> String {
+        format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(creds)
+        )
+    }
+
+    #[test]
+    fn correct_password_passes() {
+        let req = req_with_auth(Some(&basic("demo:s3cret")));
+        assert!(basic_auth_ok(&req, "demo:s3cret"));
+    }
+
+    #[test]
+    fn wrong_password_is_rejected() {
+        let req = req_with_auth(Some(&basic("demo:wrong")));
+        assert!(!basic_auth_ok(&req, "demo:s3cret"));
+    }
+
+    #[test]
+    fn missing_header_is_rejected() {
+        assert!(!basic_auth_ok(&req_with_auth(None), "demo:s3cret"));
+    }
+
+    #[test]
+    fn malformed_header_does_not_panic() {
+        // 各种畸形输入都只该返回 false，不该炸
+        for h in [
+            "Basic",
+            "Basic !!!not-base64!!!",
+            "Bearer token",
+            "",
+            "Basic ",
+        ] {
+            assert!(
+                !basic_auth_ok(&req_with_auth(Some(h)), "demo:s3cret"),
+                "{h}"
+            );
+        }
+    }
+
+    #[test]
+    fn scheme_is_case_insensitive() {
+        // RFC 7235 说认证方案不区分大小写，有些客户端会发小写
+        let req = req_with_auth(Some(&basic("demo:s3cret").replace("Basic", "basic")));
+        assert!(basic_auth_ok(&req, "demo:s3cret"));
+    }
+
+    #[test]
+    fn challenge_lets_browsers_prompt() {
+        let resp = unauthorized();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let challenge = resp
+            .headers()
+            .get(hyper::header::WWW_AUTHENTICATE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(challenge.starts_with("Basic realm="), "实际：{challenge}");
+        // realm 里不该泄露隧道信息——这个头在认证之前就发出去了
+        assert!(!challenge.contains("zhangsan"));
     }
 }
