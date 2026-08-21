@@ -64,6 +64,19 @@ assert_eq!(validate_user("admin"), Err(code::NAME_RESERVED));
 
 用户能看到的文案一律用中文，而且要说人话——报错要告诉用户发生了什么、该怎么办，别把错误码直接甩出去。
 
+## 验证脚本
+
+单元测试之外还有三个跑真东西的脚本，改动核心链路后值得跑一遍：
+
+```bash
+./scripts/demo.sh              # 本机起全套，跑通完整链路
+./scripts/verify-desktop.sh    # 桌面端：自动连接、恢复隧道、本地 API
+./scripts/verify-vite-plugin.sh # 真 Vite 项目经隧道访问
+```
+
+它们不是摆设——`verify-vite-plugin.sh` 抓出过两个单元测试发现不了的 bug
+（本地 API 把 Node 的 fetch 当浏览器挡掉了、Vite 只绑 IPv6 而数据面只连 IPv4）。
+
 ## 现在还没做的
 
-TCP 隧道、请求观测与重放、访问口令、接入同事的服务、Web 管理台。设计已经想过，见项目文档。
+Web 管理台、私有互连（点对点、不经公网暴露）、QUIC 传输。设计已经想过，见项目文档。

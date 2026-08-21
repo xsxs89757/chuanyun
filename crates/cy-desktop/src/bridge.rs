@@ -9,7 +9,7 @@ use std::sync::Arc;
 use cy_core::{Engine, Status};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use crate::{AppWindow, TunnelUi};
+use crate::{AppWindow, ConnectUi, RequestUi, TunnelUi};
 
 /// 把界面的回调接到引擎上，并让引擎的状态变化反映到界面。
 pub fn wire(
@@ -23,6 +23,10 @@ pub fn wire(
 
     let tunnels: Rc<VecModel<TunnelUi>> = Rc::new(VecModel::default());
     window.set_tunnels(ModelRc::from(tunnels.clone()));
+    let requests: Rc<VecModel<RequestUi>> = Rc::new(VecModel::default());
+    window.set_requests(ModelRc::from(requests.clone()));
+    let connects: Rc<VecModel<ConnectUi>> = Rc::new(VecModel::default());
+    window.set_connects(ModelRc::from(connects.clone()));
 
     wire_callbacks(window, &engine, &runtime);
     wire_tray(window, tray, &engine, &runtime);
@@ -148,6 +152,68 @@ fn wire_callbacks(window: &AppWindow, engine: &Engine, runtime: &Arc<tokio::runt
         }
     });
 
+    // 观测：重放与清空
+    {
+        let engine = engine.clone();
+        let runtime = runtime.clone();
+        window.on_replay(move |id| {
+            let engine = engine.clone();
+            runtime.spawn(async move {
+                let Some(record) = engine.inspector().get(id as u64) else {
+                    return;
+                };
+                let Some(port) = engine.status().tunnel(&record.tunnel).map(|t| t.local_port)
+                else {
+                    tracing::warn!(tunnel = %record.tunnel, "隧道已不在，无法确定重放到哪个端口");
+                    return;
+                };
+                match cy_core::inspector::replay(&record, port).await {
+                    Ok((status, _)) => tracing::info!(id, status, "已重放"),
+                    Err(e) => tracing::warn!(id, error = %e, "重放失败"),
+                }
+            });
+        });
+    }
+
+    {
+        let engine = engine.clone();
+        window.on_clear_requests(move || engine.inspector().clear(None));
+    }
+
+    // 接入
+    {
+        let engine = engine.clone();
+        let runtime = runtime.clone();
+        window.on_add_connect(move |from, port| {
+            let engine = engine.clone();
+            let from = from.to_string();
+            let Ok(port) = u16::try_from(port.max(0)) else {
+                return;
+            };
+            runtime.spawn(async move {
+                if let Err(e) = engine
+                    .add_connect(cy_core::connect::ConnectSpec::new(port, from))
+                    .await
+                {
+                    // 失败原因会随状态刷新显示在那条接入的卡片上
+                    tracing::warn!(error = %e, "接入失败");
+                }
+            });
+        });
+    }
+
+    {
+        let engine = engine.clone();
+        let runtime = runtime.clone();
+        window.on_remove_connect(move |port| {
+            let engine = engine.clone();
+            let Ok(port) = u16::try_from(port.max(0)) else {
+                return;
+            };
+            runtime.spawn(async move { engine.remove_connect(port).await });
+        });
+    }
+
     window.set_autostart(autostart_enabled());
 }
 
@@ -201,21 +267,26 @@ fn spawn_status_pump(
     runtime.spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
         let mut last: Option<Status> = None;
+        let mut last_request_count = usize::MAX;
 
         loop {
             ticker.tick().await;
             let status = engine.status();
+            let request_count = engine.inspector().len();
             // 没变就不打扰界面线程
-            if last.as_ref() == Some(&status) {
+            if last.as_ref() == Some(&status) && last_request_count == request_count {
                 continue;
             }
             last = Some(status.clone());
+            last_request_count = request_count;
 
+            let records = engine.inspector().list(None);
             let weak = weak.clone();
             let tray_weak = tray_weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     apply_status(&w, &status);
+                    apply_requests(&w, &records);
                 }
                 if let Some(t) = tray_weak.upgrade() {
                     t.set_connected(status.connected);
@@ -241,6 +312,8 @@ fn apply_status(window: &AppWindow, status: &Status) {
         .map(|t| TunnelUi {
             name: t.name.clone().into(),
             local_port: t.local_port as i32,
+            kind: "http".into(),
+            protected: false,
             url: t.url.clone().unwrap_or_default().into(),
             enabled: t.enabled,
             error: t.error.clone().unwrap_or_default().into(),
@@ -251,6 +324,46 @@ fn apply_status(window: &AppWindow, status: &Status) {
     let model = window.get_tunnels();
     if let Some(vec_model) = model.as_any().downcast_ref::<VecModel<TunnelUi>>() {
         vec_model.set_vec(rows);
+    }
+
+    let connects: Vec<ConnectUi> = status
+        .connects
+        .iter()
+        .map(|c| ConnectUi {
+            local_port: c.local_port as i32,
+            from: c.from.clone().into(),
+            upstream: c.upstream.clone().into(),
+            running: c.running,
+            error: c.error.clone().unwrap_or_default().into(),
+        })
+        .collect();
+    if let Some(model) = window
+        .get_connects()
+        .as_any()
+        .downcast_ref::<VecModel<ConnectUi>>()
+    {
+        model.set_vec(connects);
+    }
+}
+
+fn apply_requests(window: &AppWindow, records: &[cy_core::inspector::Record]) {
+    let rows: Vec<RequestUi> = records
+        .iter()
+        .map(|r| RequestUi {
+            id: r.id as i32,
+            method: r.method.clone().into(),
+            path: r.path.clone().into(),
+            status: r.status.unwrap_or(0) as i32,
+            duration_ms: r.duration.map(|d| d.as_millis() as i32).unwrap_or(0),
+            tunnel: r.tunnel.clone().into(),
+        })
+        .collect();
+    if let Some(model) = window
+        .get_requests()
+        .as_any()
+        .downcast_ref::<VecModel<RequestUi>>()
+    {
+        model.set_vec(rows);
     }
 }
 
