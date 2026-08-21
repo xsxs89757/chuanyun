@@ -2,7 +2,7 @@
 #
 # 穿云服务端一键安装。
 #
-#   curl -fsSL https://raw.githubusercontent.com/xsxs89757/chuanyun/main/scripts/install-server.sh \
+#   curl -fsSL https://github.com/xsxs89757/chuanyun/releases/latest/download/install-server.sh \
 #     | sudo sh -s -- --domain t.example.com
 #
 # 再跑一次就是升级：二进制换新，配置和数据都留着。
@@ -52,7 +52,7 @@ usage() {
 穿云服务端安装脚本
 
 用法：
-  curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install-server.sh \\
+  curl -fsSL https://github.com/$REPO/releases/latest/download/install-server.sh \\
     | sudo sh -s -- --domain t.example.com
 
 选项：
@@ -108,8 +108,10 @@ esac
 # API 对未认证请求按 IP 限流（60 次/小时），而国内云服务器的出口 IP 常被大量共享，
 # 很容易一上来就撞上 403 rate limit。跳转这条路没有这个限制。
 if command -v curl >/dev/null 2>&1; then
-    fetch()       { curl -fsSL --max-time 60 "$1"; }
-    fetch_file()  { curl -fsSL --max-time 300 "$1" -o "$2"; }
+    # --retry：国内服务器连 GitHub 常常又慢又断，一次失败不代表下不来。
+    # 下载给 600 秒：实测某台阿里云上只有 20KB/s 上下，2MB 要好几分钟。
+    fetch()       { curl -fsSL --retry 3 --retry-delay 2 --max-time 60 "$1"; }
+    fetch_file()  { curl -fsSL --retry 3 --retry-delay 2 --max-time 600 "$1" -o "$2"; }
     fetch_quick() { curl -fsSL --max-time 3 "$1"; }
     latest_tag() {
         u=$(curl -fsSLI -o /dev/null -w '%{url_effective}' --max-time 30 \
@@ -117,8 +119,8 @@ if command -v curl >/dev/null 2>&1; then
         case "$u" in */tag/*) echo "${u##*/tag/}" ;; *) return 1 ;; esac
     }
 elif command -v wget >/dev/null 2>&1; then
-    fetch()       { wget -qO- --timeout=60 "$1"; }
-    fetch_file()  { wget -qO "$2" --timeout=300 "$1"; }
+    fetch()       { wget -qO- --tries=3 --timeout=60 "$1"; }
+    fetch_file()  { wget -qO "$2" --tries=3 --timeout=600 "$1"; }
     fetch_quick() { wget -qO- --timeout=3 --tries=1 "$1"; }
     latest_tag() {
         u=$(wget -qS --max-redirect=0 --timeout=30 -O /dev/null \
@@ -169,7 +171,7 @@ FIRST_INSTALL=1
 if [ "$FIRST_INSTALL" = 1 ] && [ -z "$DOMAIN" ]; then
     die "首次安装要指定隧道域名后缀，比如：
 
-    curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install-server.sh \\
+    curl -fsSL https://github.com/$REPO/releases/latest/download/install-server.sh \\
       | sudo sh -s -- --domain t.example.com
 
   这个域名要能加泛解析（*.t.example.com 指向本机），隧道地址会长成
@@ -402,7 +404,16 @@ fi
 
 FP=""
 if [ "$START" = 1 ] && [ "$HAS_SYSTEMD" = 1 ]; then
-    FP=$("$BIN_DIR/chuanyun-server" -c "$CONF" fingerprint 2>/dev/null || true)
+    # 等证书落盘再读。systemctl is-active 对 Type=simple 在进程刚 fork 出来
+    # 就返回 active，那一刻自签证书还没写出去——真机上装出来指纹就是空的，
+    # 把「稍后自己查」推给用户很没必要。
+    i=0
+    while [ "$i" -lt 30 ]; do
+        FP=$("$BIN_DIR/chuanyun-server" -c "$CONF" fingerprint 2>/dev/null || true)
+        [ -n "$FP" ] && break
+        i=$((i + 1))
+        sleep 0.2
+    done
 fi
 [ -n "$FP" ] || FP="（服务起来后跑 chuanyun-server fingerprint 查看）"
 

@@ -107,6 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -114,6 +115,10 @@ jobs:
         run: |
           mkdir -p out
           find artifacts -type f -exec mv {} out/ \;
+          # 安装脚本也发成 release 资产：raw.githubusercontent.com 在国内
+          # 服务器上常年不通，而 releases/…/download 会跳到
+          # objects.githubusercontent.com，那个通。文档里主推的就是这条地址。
+          cp scripts/install-server.sh out/
           # 先写到别处再挪进来，否则 sha256sum * 会把正在写的 SHA256SUMS 自己也算进去
           (cd out && sha256sum -- *) > SHA256SUMS
           mv SHA256SUMS out/

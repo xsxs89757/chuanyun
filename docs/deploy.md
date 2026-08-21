@@ -20,7 +20,7 @@ production site, problems don't spill over, and cookies don't leak between them.
 ## One command
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xsxs89757/chuanyun/main/scripts/install-server.sh \
+curl -fsSL https://github.com/xsxs89757/chuanyun/releases/latest/download/install-server.sh \
   | sudo sh -s -- --domain t.example.com
 ```
 
@@ -36,10 +36,47 @@ Other options:
 
 ```bash
 --version v0.1.0      # install a specific version (default: latest)
---control-port 7100   # control channel port (default: 7000)
+--control-port 7100   # control channel, what clients dial (default: 7000)
+--http-port 7080      # HTTP ingress, loopback only, for nginx (default: 7080)
+--admin-port 7101     # admin interface, loopback only (default: 7001)
 --no-start            # install but don't start
 --uninstall           # remove it (data directory is kept)
 ```
+
+**You will probably need to change the ports.** Servers rarely sit empty — frp
+defaults to 7000, and docker frequently holds 7001. The script checks all three
+before touching anything, and if one is taken it tells you which port, what holds
+it, and which flag to pass, without changing a thing.
+
+## When GitHub is slow or unreachable
+
+From servers in mainland China, `raw.githubusercontent.com` is usually
+unreachable and `github.com` itself is intermittent (on one test machine,
+downloads ran at roughly 20 KB/s). So:
+
+- The command above uses `github.com/…/releases/latest/download/…`, which
+  redirects to `objects.githubusercontent.com` — far more reliable. **Don't**
+  substitute the raw.githubusercontent.com URL.
+- The script retries three times and allows 600 seconds for the download.
+
+If it still won't come down, install offline: fetch the files somewhere with good
+connectivity, copy them over, and point the script at them.
+
+```bash
+# On a machine with working GitHub access
+VER=0.1.0
+curl -fLO https://github.com/xsxs89757/chuanyun/releases/download/v$VER/chuanyun-server-$VER-linux-x86_64.tar.gz
+curl -fLO https://github.com/xsxs89757/chuanyun/releases/download/v$VER/SHA256SUMS
+curl -fLO https://github.com/xsxs89757/chuanyun/releases/download/v$VER/install-server.sh
+scp chuanyun-server-$VER-linux-x86_64.tar.gz SHA256SUMS install-server.sh root@server:/tmp/
+
+# On the server
+cd /tmp && CHUANYUN_BASE_URL=file:///tmp sh install-server.sh \
+  --domain t.example.com --version v$VER
+```
+
+`CHUANYUN_BASE_URL` can point anywhere those files live — a local directory, an
+internal HTTP server, object storage. Checksums are still verified.
 
 ## After installing: four steps left
 
@@ -131,7 +168,7 @@ journalctl -u chuanyun-server -f      # logs
 Run the same install command again. Config and data are left alone:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xsxs89757/chuanyun/main/scripts/install-server.sh | sudo sh
+curl -fsSL https://github.com/xsxs89757/chuanyun/releases/latest/download/install-server.sh | sudo sh
 ```
 
 No `--domain` needed on an upgrade — the config already has it. Tunnels blip for a couple of
@@ -140,7 +177,7 @@ seconds while the service restarts, then clients reconnect on their own. Address
 ## Uninstalling
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xsxs89757/chuanyun/main/scripts/install-server.sh | sudo sh -s -- --uninstall
+curl -fsSL https://github.com/xsxs89757/chuanyun/releases/latest/download/install-server.sh | sudo sh -s -- --uninstall
 ```
 
 Stops and removes the service and deletes the binary. **Config and data are deliberately

@@ -55,7 +55,7 @@ log in, open a tunnel.
 ### Server (Linux, x86_64)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xsxs89757/chuanyun/main/scripts/install-server.sh \
+curl -fsSL https://github.com/xsxs89757/chuanyun/releases/latest/download/install-server.sh \
   | sudo sh -s -- --domain t.example.com
 ```
 
