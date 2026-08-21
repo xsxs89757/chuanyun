@@ -59,6 +59,7 @@ git clone <仓库地址> && cd chuanyun
 | [怎么用](docs/使用.md) | 开隧道、调微信回调、项目接入、本地 API |
 | [品牌注入](brand/README.md) | 怎么打出"同事装上就能登录"的内部版 |
 | [Vite 插件](integrations/vite-plugin-chuanyun/README.md) | 前端项目一行接入 |
+| [发版](docs/发布.md) | 打 tag、npm 发布、更新检查怎么走 |
 | [参与开发](CONTRIBUTING.md) | 仓库结构、约束、测试怎么写 |
 
 ## 现状

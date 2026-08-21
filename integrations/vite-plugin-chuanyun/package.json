@@ -2,7 +2,11 @@
   "name": "vite-plugin-chuanyun",
   "version": "0.1.0",
   "description": "把 Vite dev server 自动接进穿云隧道：注册端口、放行域名、打印公网地址",
-  "keywords": ["vite-plugin", "chuanyun", "tunnel"],
+  "keywords": [
+    "vite-plugin",
+    "chuanyun",
+    "tunnel"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,11 +17,15 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "npm run build && node --test test/index.test.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "prepare": "npm run build"
   },
   "peerDependencies": {
     "vite": ">=5"
@@ -27,5 +35,20 @@
     "typescript": "^5.6.0",
     "vite": "^6.0.0"
   },
-  "engines": { "node": ">=18" }
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xsxs89757/chuanyun.git",
+    "directory": "integrations/vite-plugin-chuanyun"
+  },
+  "homepage": "https://github.com/xsxs89757/chuanyun/tree/main/integrations/vite-plugin-chuanyun",
+  "bugs": {
+    "url": "https://github.com/xsxs89757/chuanyun/issues"
+  },
+  "author": "WangLei",
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -66,9 +66,14 @@ slint-build = "~1.17"
 auto-launch = "0.6"
 qrcode = "0.14"
 
-# 测试
-# e2e 打的是明文 HTTP ingress（TLS 由前置 nginx 终止），不需要 TLS feature
-reqwest = { version = "0.13", default-features = false, features = ["stream", "json"] }
+# e2e 打的是明文 HTTP ingress（TLS 由前置 nginx 终止），本来不需要 TLS；
+# rustls 是给客户端查更新用的（要访问 https://api.github.com）。
+# 服务端的 musl 静态产物不依赖 cy-core，所以这里带上 rustls 不影响那条构建线。
+reqwest = { version = "0.13", default-features = false, features = [
+    "stream",
+    "json",
+    "rustls",
+] }
 tokio-tungstenite = "0.30"
 tempfile = "3"
 

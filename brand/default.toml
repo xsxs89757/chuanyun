@@ -21,5 +21,11 @@ tls_pin = ""
 # 适用于给控制端口配了正规证书的部署）。
 tls_verify = "pin"
 
-# 检查更新与下载页地址。留空则关闭更新检查。
-update_url = ""
+# 去哪儿查新版本。
+#
+# 默认是本仓库的 GitHub Releases——CI 打 tag 时已经把三个平台的安装包传上去了，
+# 那里本来就是最新版所在的地方。填仓库主页地址就行，客户端会自己换算成 API 地址。
+#
+# 内部部署如果不想让客户端连外网，把它指向自己服务端的
+# `/api/client/version`（管理接口已经提供了同样形状的返回）。留空则不检查更新。
+update_url = "https://github.com/xsxs89757/chuanyun"

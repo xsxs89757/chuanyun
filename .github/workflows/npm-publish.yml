@@ -1,0 +1,42 @@
+name: Publish vite plugin
+
+# 插件和主程序的版本节奏不一样，所以用自己的 tag：plugin-v0.1.0
+# 主程序发版用 v0.1.0，两者互不打扰。
+on:
+  push:
+    tags: ["plugin-v*"]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/vite-plugin-chuanyun
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci || npm install
+
+      # 先跑测试再发布：一旦发出去就撤不回来了（npm 只允许 72 小时内 unpublish，
+      # 而且撤回过的版本号不能再用）
+      - run: npm test
+
+      - name: 核对 tag 与 package.json 的版本
+        run: |
+          TAG="${GITHUB_REF_NAME#plugin-v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag 是 $TAG，但 package.json 里写的是 $PKG——先对齐再发"
+            exit 1
+          fi
+        if: startsWith(github.ref, 'refs/tags/')
+
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

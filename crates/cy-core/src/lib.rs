@@ -21,6 +21,7 @@ pub mod inspector;
 pub mod local_api;
 pub mod localhost;
 pub mod state;
+pub mod update;
 pub mod verifier;
 
 pub use backoff::Backoff;

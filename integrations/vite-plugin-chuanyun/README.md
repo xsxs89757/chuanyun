@@ -1,10 +1,44 @@
 # vite-plugin-chuanyun
 
-把 Vite 的 dev server 自动接进[穿云](../../README.md)隧道。
+把 Vite 的 dev server 自动接进[穿云](https://github.com/xsxs89757/chuanyun)隧道。
+
+## 安装
 
 ```bash
 npm i -D vite-plugin-chuanyun
 ```
+
+```bash
+pnpm add -D vite-plugin-chuanyun
+```
+
+```bash
+yarn add -D vite-plugin-chuanyun
+```
+
+<details>
+<summary>还没发到 npm？也可以直接从 GitHub 装</summary>
+
+pnpm 支持从仓库子目录安装：
+
+```bash
+pnpm add -D "github:xsxs89757/chuanyun#path:/integrations/vite-plugin-chuanyun"
+```
+
+npm 和 yarn 不支持子目录，得先打个包再装：
+
+```bash
+git clone https://github.com/xsxs89757/chuanyun.git
+cd chuanyun/integrations/vite-plugin-chuanyun
+npm install && npm pack        # 得到 vite-plugin-chuanyun-0.1.0.tgz
+
+cd /你的前端项目
+npm i -D /path/to/vite-plugin-chuanyun-0.1.0.tgz
+```
+
+</details>
+
+## 用法
 
 ```ts
 // vite.config.ts
@@ -23,6 +57,8 @@ export default defineConfig({
   ➜  穿云:    https://zhangsan-admin.t.example.com
 ```
 
+那个地址是公网可达的固定地址，可以直接填进微信后台、发给同事、用手机打开。
+
 ## 它替你做了什么
 
 **放行隧道域名。** Vite 默认会拦下不认识的 Host，经隧道访问时你会撞上
@@ -38,16 +74,24 @@ export default defineConfig({
 
 | 选项 | 默认 | 说明 |
 |---|---|---|
-| `name` | package.json 的项目名 | 隧道名，会变成地址的一部分 |
+| `name` | package.json 的项目名 | 隧道名，会变成地址的一部分。`@company/admin-panel` 会取成 `admin-panel` |
 | `apiPort` | `7075` | 穿云客户端的本地接口端口 |
 | `auth` | 无 | 访问口令（`用户名:口令`），给隧道加一道门 |
 | `enabled` | `true` | 设成 `false` 可在 CI 等环境里跳过 |
 
-## 穿云没开着的时候
+按环境开关：
 
-什么也不会发生——插件打一行提示就让路。dev server 照常启动，`localhost` 照常能用。
+```ts
+plugins: [chuanyun({ enabled: !process.env.CI })]
+```
 
-一个可选功能不该让本地开发起不来，所以连不上、超时、没登录这些情况全部静默降级。
+## 前提
+
+需要本机装着并登录了[穿云客户端](https://github.com/xsxs89757/chuanyun)。
+
+**没装或没登录也不影响**——插件打一行提示就让路，dev server 照常启动，
+`localhost` 照常能用。一个可选功能不该让本地开发起不来，所以连不上、超时、
+没登录这些情况全部静默降级。
 
 ## HMR
 
@@ -57,3 +101,7 @@ export default defineConfig({
 ```ts
 server: { hmr: { clientPort: 443 } }
 ```
+
+## 许可
+
+Apache-2.0

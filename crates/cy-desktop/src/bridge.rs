@@ -214,7 +214,68 @@ fn wire_callbacks(window: &AppWindow, engine: &Engine, runtime: &Arc<tokio::runt
         });
     }
 
+    // 检查更新
+    {
+        let runtime = runtime.clone();
+        let weak = window.as_weak();
+        window.on_check_update(move || {
+            let weak = weak.clone();
+            let update_url = cy_core::brand::embedded().update_url;
+            if let Some(w) = weak.upgrade() {
+                w.set_update_checking(true);
+                w.set_update_text("".into());
+                w.set_update_url("".into());
+            }
+            runtime.spawn(async move {
+                let result = cy_core::update::check(&update_url, env!("CARGO_PKG_VERSION")).await;
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    w.set_update_checking(false);
+                    match result {
+                        Ok(Some(release)) => {
+                            w.set_update_text(format!("有新版本 {}", release.version).into());
+                            w.set_update_url(release.url.into());
+                        }
+                        Ok(None) => w.set_update_text("已经是最新版本".into()),
+                        Err(cy_core::update::UpdateError::Disabled) => {
+                            w.set_update_text("这个版本没有配置更新地址".into())
+                        }
+                        Err(e) => w.set_update_text(format!("查不到：{e}").into()),
+                    }
+                });
+            });
+        });
+    }
+
+    window.on_open_url(move |url| {
+        if let Err(e) = open_in_browser(&url) {
+            tracing::warn!(%url, error = %e, "打开浏览器失败");
+        }
+    });
+
     window.set_autostart(autostart_enabled());
+}
+
+/// 用系统默认浏览器打开一个链接。
+fn open_in_browser(url: &str) -> std::io::Result<()> {
+    // 只放行 http(s)——这个函数的入参来自网络响应，
+    // 别让它变成"服务端能让客户端执行任意命令"的口子
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "只支持 http(s) 链接",
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    let (cmd, args) = ("open", vec![url]);
+    #[cfg(target_os = "windows")]
+    let (cmd, args) = ("cmd", vec!["/C", "start", "", url]);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let (cmd, args) = ("xdg-open", vec![url]);
+
+    std::process::Command::new(cmd).args(args).spawn()?;
+    Ok(())
 }
 
 fn wire_tray(
