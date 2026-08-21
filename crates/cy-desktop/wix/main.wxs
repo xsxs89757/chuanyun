@@ -83,9 +83,12 @@
             DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
 
         <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
-        <Property Id='DiskPrompt' Value='cy-desktop Installation'/>
+        <Property Id='DiskPrompt' Value='穿云 安装程序'/>
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
+            <!-- 引用 ProgramMenuFolder 之前必须先声明它，
+                 否则 light 会报 Unresolved reference to symbol 'Directory:ProgramMenuFolder' -->
+            <Directory Id='ProgramMenuFolder'/>
             <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
                 <Directory Id='APPLICATIONFOLDER' Name='穿云'>
                     <!--

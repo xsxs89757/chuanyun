@@ -9,8 +9,8 @@ on:
 
 permissions:
   contents: read
-  # --provenance 要靠 OIDC 换取签名凭据，少了这条权限发布会直接失败。
-  # 它带来的好处是 npm 页面上会显示「这个包确实由这个仓库的这次提交构建」。
+  # 走 npm 的 Trusted Publishing（OIDC）：这条权限让 Actions 能换取一次性凭据，
+  # 仓库里因此不需要存任何 npm 令牌——没有长期令牌可偷，也不受 2FA 拦截。
   id-token: write
 
 jobs:
@@ -27,6 +27,10 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      # Trusted Publishing 需要 npm 11.5.1 以上，runner 自带的版本可能不够
+      - run: npm install -g npm@latest
+        working-directory: .
+
       - run: npm ci || npm install
 
       # 先跑测试再发布：一旦发出去就撤不回来了（npm 只允许 72 小时内 unpublish，
@@ -34,6 +38,7 @@ jobs:
       - run: npm test
 
       - name: 核对 tag 与 package.json 的版本
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG="${GITHUB_REF_NAME#plugin-v}"
           PKG=$(node -p "require('./package.json').version")
@@ -41,8 +46,7 @@ jobs:
             echo "tag 是 $TAG，但 package.json 里写的是 $PKG——先对齐再发"
             exit 1
           fi
-        if: startsWith(github.ref, 'refs/tags/')
 
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # 不需要 NODE_AUTH_TOKEN，也不需要 --provenance：
+      # 走 Trusted Publishing 时 npm 会自动生成来源证明。
+      - run: npm publish
