@@ -9,8 +9,31 @@ permissions:
   contents: write
 
 jobs:
+  # 产物名里带版本号，安装脚本靠版本号拼文件名。
+  # tag 和 Cargo.toml 对不上就会拼出一个 404 的地址，所以先卡住。
+  version:
+    name: 核对版本
+    runs-on: ubuntu-latest
+    outputs:
+      number: ${{ steps.v.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          NUM=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ -n "${GITHUB_REF_NAME:-}" ] && [ "${GITHUB_REF_TYPE:-}" = tag ]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            if [ "$TAG" != "$NUM" ]; then
+              echo "tag 是 $TAG，但 Cargo.toml 里写的是 $NUM——先对齐再发" >&2
+              exit 1
+            fi
+          fi
+          echo "number=$NUM" >> "$GITHUB_OUTPUT"
+          echo "版本 $NUM"
+
   linux:
     name: 服务端（Linux 静态二进制）
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,14 +48,15 @@ jobs:
           mkdir -p dist
           cp target/x86_64-unknown-linux-musl/release/chuanyun-server dist/
           cp deploy/chuanyun-server.service deploy/nginx.conf.example dist/
-          tar czf chuanyun-server-linux-x86_64.tar.gz -C dist .
+          tar czf chuanyun-server-${{ needs.version.outputs.number }}-linux-x86_64.tar.gz -C dist .
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: chuanyun-server-linux-x86_64.tar.gz
+          path: chuanyun-server-*-linux-x86_64.tar.gz
 
   macos:
     name: 客户端（macOS 通用包）
+    needs: version
     # 免费的 x86_64 runner 已经没有了，所以在 arm64 机器上交叉编译两个架构再 lipo 合并。
     # 只有一台机器，产物路径也更简单。
     runs-on: macos-latest
@@ -50,6 +74,7 @@ jobs:
 
   windows:
     name: 客户端（Windows MSI）
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,31 +90,68 @@ jobs:
       # - 带 --package：cargo-wix 认出这是 workspace，不指定包名就拒绝干活
       - run: cargo wix --package cy-desktop --nocapture
         working-directory: crates/cy-desktop
+      # cargo-wix 按包名命名（cy-desktop-…），改成跟另外两个产物一致的名字
+      - name: 改名
+        shell: bash
+        run: |
+          mkdir -p out
+          mv target/wix/*.msi "out/chuanyun-${{ needs.version.outputs.number }}-windows-x86_64.msi"
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: target/wix/*.msi
+          path: out/*.msi
 
   release:
     name: 发布
-    needs: [linux, macos, windows]
+    needs: [version, linux, macos, windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      - name: 汇总产物并生成校验和
+        run: |
+          mkdir -p out
+          find artifacts -type f -exec mv {} out/ \;
+          # 先写到别处再挪进来，否则 sha256sum * 会把正在写的 SHA256SUMS 自己也算进去
+          (cd out && sha256sum -- *) > SHA256SUMS
+          mv SHA256SUMS out/
+          ls -lh out/
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: out/*
           body: |
-            ## 安装
+            ## Server (Linux)
 
-            **服务端**：解压 `chuanyun-server-linux-x86_64.tar.gz`，按 [部署文档](docs/部署.md) 配置。
+            ```
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install-server.sh \
+              | sudo sh -s -- --domain t.example.com
+            ```
 
-            **客户端**：下载对应系统的安装包。没有购买代码签名证书，第一次打开时——
+            Downloads, installs, registers a systemd service, and prints the next
+            four steps (DNS, firewall, nginx, first credential). Re-run it to upgrade.
+            Full guide: [docs/deploy.md](https://github.com/${{ github.repository }}/blob/main/docs/deploy.md)
 
-            - macOS：右键点应用图标 → 打开 → 再点「打开」（直接双击会被拦）
-            - Windows：SmartScreen 提示时点「更多信息」→「仍要运行」
+            一条命令装完，脚本会把接下来该做的四件事（解析、放行端口、nginx、发凭证）
+            打在屏幕上。再跑一次就是升级。中文说明见
+            [docs/部署.md](https://github.com/${{ github.repository }}/blob/main/docs/部署.md)。
 
-            每台机器做一次就好。
+            ## Desktop client
+
+            Download the installer for your system below.
+            It is **not code-signed**, so the first launch needs one extra step:
+
+            - **macOS** — right-click the app icon → Open → Open. Double-clicking is blocked.
+            - **Windows** — on the SmartScreen prompt, click "More info" → "Run anyway".
+
+            Once per machine.
+
+            没有购买代码签名证书，所以第一次打开要多一步：macOS 右键图标 → 打开 → 再点「打开」；
+            Windows 在 SmartScreen 提示时点「更多信息」→「仍要运行」。每台机器做一次就好。
+
+            ## Verify / 校验
+
+            ```
+            sha256sum -c SHA256SUMS --ignore-missing
+            ```

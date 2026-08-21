@@ -1,7 +1,7 @@
 {
   "name": "vite-plugin-chuanyun",
   "version": "0.1.1",
-  "description": "把 Vite dev server 自动接进穿云隧道：注册端口、放行域名、打印公网地址",
+  "description": "Expose a Vite dev server through a chuanyun tunnel: registers the port, allows the host, prints the public URL",
   "keywords": [
     "vite-plugin",
     "chuanyun",
@@ -19,7 +19,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md"
   ],
   "scripts": {
     "build": "tsc",

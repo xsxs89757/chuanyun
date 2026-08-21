@@ -1,8 +1,11 @@
 # vite-plugin-chuanyun
 
-把 Vite 的 dev server 自动接进[穿云](https://github.com/xsxs89757/chuanyun)隧道。
+[English](README.md) · [中文](README.zh-CN.md)
 
-## 安装
+Expose a Vite dev server through a [chuanyun](https://github.com/xsxs89757/chuanyun) tunnel,
+automatically.
+
+## Install
 
 ```bash
 npm i -D vite-plugin-chuanyun
@@ -17,28 +20,28 @@ yarn add -D vite-plugin-chuanyun
 ```
 
 <details>
-<summary>也可以不经 npm 安装</summary>
+<summary>Installing without npm</summary>
 
-pnpm 支持从仓库子目录直接装：
+pnpm can install straight from a subdirectory of the repo:
 
 ```bash
 pnpm add -D "github:xsxs89757/chuanyun#path:/integrations/vite-plugin-chuanyun"
 ```
 
-npm 和 yarn 不支持子目录，得先打个包：
+npm and yarn don't support subdirectories, so build a tarball first:
 
 ```bash
 git clone https://github.com/xsxs89757/chuanyun.git
 cd chuanyun/integrations/vite-plugin-chuanyun
-npm install && npm pack        # 得到 vite-plugin-chuanyun-x.y.z.tgz
+npm install && npm pack        # produces vite-plugin-chuanyun-x.y.z.tgz
 
-cd /你的前端项目
+cd /your/frontend/project
 npm i -D /path/to/vite-plugin-chuanyun-x.y.z.tgz
 ```
 
 </details>
 
-## 用法
+## Usage
 
 ```ts
 // vite.config.ts
@@ -50,58 +53,62 @@ export default defineConfig({
 })
 ```
 
-启动 dev server 就会多出一行：
+Start the dev server and you get one extra line:
 
 ```
   ➜  Local:   http://localhost:5173/
   ➜  穿云:    https://zhangsan-admin.t.example.com
 ```
 
-那个地址是公网可达的固定地址，可以直接填进微信后台、发给同事、用手机打开。
+That address is reachable from the public internet and stays the same across restarts — paste
+it into a webhook console, send it to a colleague, open it on your phone.
 
-## 它替你做了什么
+## What it does for you
 
-**放行隧道域名。** Vite 默认会拦下不认识的 Host，经隧道访问时你会撞上
-`Blocked request: this host is not allowed`。插件把隧道域名加进 `allowedHosts`，
-不用你手配（你自己配的那些会保留，不会被覆盖）。
+**Allows the tunnel host.** Vite blocks Hosts it doesn't recognise, so going through a tunnel
+you'd hit `Blocked request: this host is not allowed`. The plugin adds the tunnel domain to
+`allowedHosts` for you (anything you configured yourself is preserved, not overwritten).
 
-**用实际端口，而不是配置里写的。** 5173 被占时 Vite 会自动挪到 5174，
-写死端口的隧道就指错了地方。插件等 dev server 真正 listening 之后再注册。
+**Uses the real port, not the configured one.** When 5173 is taken Vite moves to 5174, and a
+tunnel pinned to the configured port would point at nothing. The plugin waits until the dev
+server is actually listening before registering.
 
-**退出时注销。** 关掉 dev server，隧道也跟着下线。
+**Unregisters on exit.** Shut down the dev server and the tunnel goes down with it.
 
-## 选项
+## Options
 
-| 选项 | 默认 | 说明 |
+| Option | Default | Meaning |
 |---|---|---|
-| `name` | package.json 的项目名 | 隧道名，会变成地址的一部分。`@company/admin-panel` 会取成 `admin-panel` |
-| `apiPort` | `7075` | 穿云客户端的本地接口端口 |
-| `auth` | 无 | 访问口令（`用户名:口令`），给隧道加一道门 |
-| `enabled` | `true` | 设成 `false` 可在 CI 等环境里跳过 |
+| `name` | the project name from package.json | Tunnel name; becomes part of the address. `@company/admin-panel` becomes `admin-panel` |
+| `apiPort` | `7075` | Port of the local chuanyun API |
+| `auth` | none | Access password (`user:password`) to put a door on the tunnel |
+| `enabled` | `true` | Set to `false` to skip it, e.g. in CI |
 
-按环境开关：
+Per-environment:
 
 ```ts
 plugins: [chuanyun({ enabled: !process.env.CI })]
 ```
 
-## 前提
+## Requirements
 
-需要本机装着并登录了[穿云客户端](https://github.com/xsxs89757/chuanyun)。
+The [chuanyun desktop client](https://github.com/xsxs89757/chuanyun) must be installed and
+logged in on the same machine.
 
-**没装或没登录也不影响**——插件打一行提示就让路，dev server 照常启动，
-`localhost` 照常能用。一个可选功能不该让本地开发起不来，所以连不上、超时、
-没登录这些情况全部静默降级。
+**If it isn't, nothing breaks.** The plugin prints one line and gets out of the way; the dev
+server starts as usual and `localhost` works as usual. Not installed, not logged in,
+connection refused, timed out — every one of those degrades silently. An optional convenience
+should never be able to stop local development.
 
 ## HMR
 
-现代 Vite 的 HMR 按页面 origin 建 WebSocket，经隧道就是 `wss://`，穿云会透传，
-无需额外配置。老版本可能需要：
+Modern Vite opens its HMR WebSocket against the page origin, which through a tunnel is
+`wss://`, and chuanyun passes it through — no configuration needed. Older versions may need:
 
 ```ts
 server: { hmr: { clientPort: 443 } }
 ```
 
-## 许可
+## License
 
 Apache-2.0

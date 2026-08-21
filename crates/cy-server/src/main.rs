@@ -50,6 +50,9 @@ enum Command {
 
     /// 查看运行状态
     Status,
+
+    /// 打印证书指纹（发客户端凭证时要连它一起给）
+    Fingerprint,
 }
 
 #[derive(Subcommand)]
@@ -125,6 +128,24 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 }
                 Err(e) => anyhow::bail!("联系服务端失败（它在运行吗？）: {e}"),
             }
+        }
+        Command::Fingerprint => {
+            let config = Config::load(&cli.config)?;
+            let dir = &config.storage.data_dir;
+            let cert = cy_server::tls::cert_path(dir);
+            // 只读不建：这条命令常以 root 跑，顺手生成会把文件属主搞成 root，
+            // 服务下次反而起不来。没有证书说明服务还没启动过。
+            if !cert.exists() {
+                anyhow::bail!(
+                    "{} 里还没有证书——先把服务端跑起来，它会自签一张",
+                    dir.display()
+                );
+            }
+            let identity =
+                cy_server::tls::Identity::from_pem_files(&cert, &cy_server::tls::key_path(dir))
+                    .with_context(|| format!("读取 {} 里的证书", dir.display()))?;
+            println!("{}", identity.fingerprint);
+            Ok(())
         }
     }
 }

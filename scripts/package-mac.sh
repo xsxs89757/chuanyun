@@ -64,7 +64,14 @@ codesign --force --deep --sign - "$APP"
 codesign --verify --verbose "$APP" 2>&1 | sed 's/^/  /'
 
 step "打 dmg"
-DMG="$DIST/穿云-$VERSION.dmg"
+# 文件名用 ASCII：CI 的 upload-artifact 会把非 ASCII 字符吞掉
+# （v0.1.0 第一次发出来就变成了 "-0.1.0.dmg"）。
+# .app 和卷标仍然叫「穿云」——那才是用户看得见的名字。
+if [ "$UNIVERSAL" = 1 ]; then
+    DMG="$DIST/chuanyun-$VERSION-macos-universal.dmg"
+else
+    DMG="$DIST/chuanyun-$VERSION-macos-$(uname -m).dmg"
+fi
 rm -f "$DMG"
 STAGE="$DIST/dmg-stage"
 rm -rf "$STAGE"; mkdir -p "$STAGE"

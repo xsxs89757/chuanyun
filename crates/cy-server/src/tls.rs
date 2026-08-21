@@ -39,8 +39,8 @@ impl Identity {
     ///
     /// 存下来很重要：每次重启都换证书的话，客户端 pin 的值就失效了。
     pub fn load_or_create(data_dir: &Path) -> Result<Self, TlsError> {
-        let cert_path = data_dir.join("control-cert.pem");
-        let key_path = data_dir.join("control-key.pem");
+        let cert_path = cert_path(data_dir);
+        let key_path = key_path(data_dir);
 
         if cert_path.exists() && key_path.exists() {
             return Self::from_pem_files(&cert_path, &key_path);
@@ -85,6 +85,18 @@ impl Identity {
             .with_single_cert(self.certs.clone(), self.key.clone_key())?;
         Ok(Arc::new(config))
     }
+}
+
+/// 自签证书与私钥在数据目录里的位置。
+///
+/// 单独暴露出来，是为了让管理命令能「只查不建」——`load_or_create` 在缺失时会
+/// 生成一张，而管理命令常以 root 运行，生成出来的文件属主是 root，服务反而起不来。
+pub fn cert_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("control-cert.pem")
+}
+
+pub fn key_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("control-key.pem")
 }
 
 /// 证书指纹：SHA-256，十六进制小写。

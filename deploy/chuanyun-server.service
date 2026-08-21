@@ -1,6 +1,6 @@
 [Unit]
 Description=穿云内网穿透服务端
-Documentation=https://github.com/chuanyun/chuanyun
+Documentation=https://github.com/xsxs89757/chuanyun
 After=network-online.target
 Wants=network-online.target
 
@@ -15,8 +15,11 @@ Group=chuanyun
 StateDirectory=chuanyun
 WorkingDirectory=/var/lib/chuanyun
 
-# 数据目录里有自签证书私钥与 SQLite 库，收紧权限
+# 数据目录里有自签证书私钥与 SQLite 库，收紧权限。
+# StateDirectoryMode 不能省：StateDirectory 会自己建目录，默认 0755，
+# 会把安装脚本设的 0700 覆盖回去，同机器的其他 ssh 用户就能列目录了。
 UMask=0077
+StateDirectoryMode=0700
 
 # 常规加固：服务端只需要网络与自己的数据目录
 NoNewPrivileges=true
