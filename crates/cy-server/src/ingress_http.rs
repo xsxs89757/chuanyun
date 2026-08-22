@@ -155,6 +155,11 @@ async fn handle(mut req: Request<Incoming>, peer: SocketAddr, ctx: Arc<Ctx>) -> 
         if !basic_auth_ok(&req, expected) {
             return unauthorized();
         }
+        // 过了门就把这个头吃掉。它是给我们这道门的，不是给后面那个应用的：
+        // 原样转过去，后端的 JWT 中间件会看到一个 `Basic` 头而不是 `Bearer`，
+        // 真机上 base 的后端就是这么被搞糊涂的。没设口令的隧道不碰这个头——
+        // 手机 app 拿 Bearer token 穿隧道调 API，靠的就是它原样透传。
+        req.headers_mut().remove(hyper::header::AUTHORIZATION);
     }
 
     let client_ip = real_client_ip(&req, peer.ip(), &ctx.config);

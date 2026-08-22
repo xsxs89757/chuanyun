@@ -297,3 +297,73 @@ async fn tunnels_without_a_password_stay_open() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 }
+
+/// 过了门之后，`Authorization` 头不能再转给本地服务。
+///
+/// 真机上证明过：设了口令的隧道把 `Authorization: Basic …` 原样转给了 vite，
+/// vite 再把它代理给后端——后端的 JWT 中间件看到一个 `Basic` 头而不是 `Bearer`。
+/// 门是我们的，过了门这个头就该被吃掉。
+#[tokio::test]
+async fn the_gate_consumes_the_authorization_header() {
+    use axum::{http::HeaderMap, routing::get, Router};
+
+    // 一个把收到的 Authorization 头原样打回来的本地服务
+    let app = Router::new().route(
+        "/",
+        get(|h: HeaderMap| async move {
+            h.get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("<none>")
+                .to_string()
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(l, app).await;
+    });
+
+    let server = TestServer::start().await;
+    let token = server.add_user("zhangsan").await;
+    let (events, _rx) = tokio::sync::broadcast::channel(64);
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
+        .await
+        .unwrap();
+    conn.open_tunnel(TunnelSpec::http("gate", port).with_auth("demo:s3cret"))
+        .await
+        .unwrap();
+    conn.open_tunnel(TunnelSpec::http("open", port))
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::builder()
+        .resolve("zhangsan-gate.t.example.com", server.handle.http_addr)
+        .resolve("zhangsan-open.t.example.com", server.handle.http_addr)
+        .build()
+        .unwrap();
+
+    let behind_gate = client
+        .get("http://zhangsan-gate.t.example.com/")
+        .basic_auth("demo", Some("s3cret"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(behind_gate.status(), 200);
+    assert_eq!(
+        behind_gate.text().await.unwrap(),
+        "<none>",
+        "设了口令：Basic 头被门吃掉，本地服务不该看到它"
+    );
+
+    let passthrough = client
+        .get("http://zhangsan-open.t.example.com/")
+        .header("authorization", "Bearer jwt-xyz")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        passthrough.text().await.unwrap(),
+        "Bearer jwt-xyz",
+        "没设口令：Authorization 原样透传，手机 app 调 API 靠它"
+    );
+}

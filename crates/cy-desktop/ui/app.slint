@@ -10,6 +10,8 @@ export struct TunnelUi {
     kind: string,
     // 设了访问口令
     protected: bool,
+    // 口令的用户名那半（浏览器弹框里「用户名」一格填它）；没设口令时为空
+    auth-user: string,
     // 公网地址；空字符串表示还没开通
     url: string,
     enabled: bool,
@@ -113,7 +115,7 @@ component TunnelRow inherits Card {
                 vertical-alignment: center;
             }
             if root.tunnel.protected: Text {
-                text: @tr("已设口令");
+                text: @tr("已设口令 · 用户名 {}", root.tunnel.auth-user);
                 font-size: 10px;
                 color: Theme.warn;
                 vertical-alignment: center;
@@ -153,8 +155,8 @@ component TunnelRow inherits Card {
             spacing: 6px;
             Text {
                 text: root.tunnel.protected
-                    ? @tr("新口令（用户名:口令）；留空并保存 = 去掉口令")
-                    : @tr("口令（用户名:口令），例如 demo:s3cret");
+                    ? @tr("新口令，写成 用户名:口令；留空并保存 = 去掉口令")
+                    : @tr("写成 用户名:口令，例如 demo:s3cret。访问时浏览器会弹出「用户名 / 密码」两格：用户名填冒号前面的，密码填冒号后面的。");
                 font-size: 11px;
                 color: Theme.muted;
                 wrap: word-wrap;

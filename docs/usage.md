@@ -127,6 +127,16 @@ When **creating** the tunnel, fill in the "access password" field as `username:p
 (e.g. `demo:s3cret`). Browsers will prompt for it; requests that fail the check never reach
 your local service.
 
+**The browser prompt has two boxes, username and password**: the part before the colon
+(`demo`) goes in the first, the part after (`s3cret`) in the second. Pasting the whole
+`demo:s3cret` into the password box is the classic mistake and makes the prompt reappear
+forever. The tunnel's card shows the username so you don't have to guess.
+
+Once past the gate, the `Authorization` header is consumed by chuanyun and **not forwarded to
+your local service** — your backend keeps using its own login and tokens and never sees a
+stray `Basic` header. Tunnels without a password pass the header through untouched (that's
+what lets a mobile app call your API with a Bearer token).
+
 A protected tunnel's card is marked **"password set"** — glance at it before sending the
 address to someone, so they aren't met with a prompt you forgot about. The password is saved
 with the tunnel and survives reconnects and app restarts.

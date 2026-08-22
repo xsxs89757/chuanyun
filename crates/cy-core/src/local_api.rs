@@ -127,6 +127,9 @@ struct TunnelBody {
     error: Option<String>,
     /// 设了访问口令（口令本身不回显）
     protected: bool,
+    /// 口令的用户名部分
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth_user: Option<String>,
 }
 
 async fn list_tunnels(State(engine): State<Arc<Engine>>) -> Json<Vec<TunnelBody>> {
@@ -142,6 +145,7 @@ async fn list_tunnels(State(engine): State<Arc<Engine>>) -> Json<Vec<TunnelBody>
                 url: t.url,
                 error: t.error,
                 protected: t.protected,
+                auth_user: t.auth_user,
             })
             .collect(),
     )

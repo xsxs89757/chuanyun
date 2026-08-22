@@ -91,6 +91,16 @@ pub struct TunnelStatus {
     /// 界面要靠它显示「已设口令」——设了口令却看不出来，忘了就要命：
     /// 发地址给别人却不知道对方会被要口令。口令本身不进状态（那是给界面看的）。
     pub protected: bool,
+    /// 口令的用户名部分。浏览器弹框是「用户名 / 密码」两格，用户对着一串
+    /// `demo:123456` 很容易把整串填进密码框——卡片上把用户名亮出来就不会猜错。
+    /// 只有用户名，口令那半永远不放进状态。
+    pub auth_user: Option<String>,
+}
+
+/// `用户名:口令` 里的用户名那半。
+fn auth_user_of(auth: Option<&str>) -> Option<String> {
+    auth.and_then(|a| a.split_once(':'))
+        .map(|(u, _)| u.to_string())
 }
 
 enum Cmd {
@@ -610,9 +620,11 @@ async fn session(
                             }
                             _ => Ok(()),
                         };
+                        let auth_now = state.spec(&name).and_then(|sp| sp.auth);
                         set_status(status, |s| {
                             if let Some(t) = s.tunnels.iter_mut().find(|t| t.name == name) {
-                                t.protected = state.spec(&name).and_then(|sp| sp.auth).is_some();
+                                t.protected = auth_now.is_some();
+                                t.auth_user = auth_user_of(auth_now.as_deref());
                             }
                         });
                         let _ = reply.send(result);
@@ -674,6 +686,7 @@ async fn open_and_record(
                     url: None,
                     error: None,
                     protected: spec.auth.is_some(),
+                    auth_user: auth_user_of(spec.auth.as_deref()),
                 });
                 s.tunnels.last_mut().expect("刚推入")
             }
@@ -750,6 +763,7 @@ async fn handle_offline_cmd(
                                 url: None,
                                 error: None,
                                 protected: spec.auth.is_some(),
+                                auth_user: auth_user_of(spec.auth.as_deref()),
                             });
                         }
                     });
@@ -781,10 +795,11 @@ async fn handle_offline_cmd(
                 return CmdOutcome::Continue;
             }
             save(state, state_path);
-            let protected = state.spec(&name).and_then(|sp| sp.auth).is_some();
+            let auth_now = state.spec(&name).and_then(|sp| sp.auth);
             set_status(status, |s| {
                 if let Some(t) = s.tunnels.iter_mut().find(|t| t.name == name) {
-                    t.protected = protected;
+                    t.protected = auth_now.is_some();
+                    t.auth_user = auth_user_of(auth_now.as_deref());
                 }
             });
             let _ = reply.send(Ok(()));
@@ -918,6 +933,7 @@ pub fn tunnels_from_state(state: &State) -> Vec<TunnelStatus> {
             url: None,
             error: None,
             protected: e.auth.is_some(),
+            auth_user: auth_user_of(e.auth.as_deref()),
         })
         .collect()
 }
@@ -974,6 +990,7 @@ mod tests {
                     url: Some("https://zhangsan-api.t.example.com".into()),
                     error: None,
                     protected: false,
+                    auth_user: None,
                 },
                 TunnelStatus {
                     name: "web".into(),
@@ -982,6 +999,7 @@ mod tests {
                     url: None,
                     error: None,
                     protected: false,
+                    auth_user: None,
                 },
             ],
             ..Default::default()

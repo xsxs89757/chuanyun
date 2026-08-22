@@ -434,6 +434,7 @@ fn apply_status(window: &AppWindow, status: &Status) {
             local_port: t.local_port as i32,
             kind: "http".into(),
             protected: t.protected,
+            auth_user: t.auth_user.clone().unwrap_or_default().into(),
             url: t.url.clone().unwrap_or_default().into(),
             enabled: t.enabled,
             error: t.error.clone().unwrap_or_default().into(),
