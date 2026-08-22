@@ -638,3 +638,49 @@ async fn an_older_package_is_not_an_update() {
 
     assert!(engine.status().update.is_none(), "0.0.1 不比当前版本新");
 }
+
+/// 项目脚本（base 的 dev.sh、vite 插件）每次启动都按「名字 + 端口」重新注册一遍，
+/// 它们不知道也不该知道口令。重新注册不能把隧道主人在客户端设好的口令抹掉——
+/// 那会变成启动脚本静默拆门，而且没有任何提示。
+#[tokio::test]
+async fn a_script_re_registering_the_tunnel_does_not_strip_the_password() {
+    use cy_core::TunnelSpec;
+
+    let server = TestServer::start().await;
+    let token = server.add_user("zhangsan").await;
+    let http = local_http().await;
+
+    let engine = Engine::start(None, brand(&server));
+    engine
+        .login(
+            server.handle.control_addr.to_string(),
+            &token,
+            &server.handle.fingerprint,
+        )
+        .await
+        .expect("登录");
+
+    // 隧道主人在客户端里设了口令
+    engine
+        .add_tunnel_spec(TunnelSpec::http("api", http).with_auth("demo:s3cret"))
+        .await
+        .expect("开隧道");
+
+    // dev.sh 启动：只给名字和端口
+    engine.add_tunnel("api", http).await.expect("重新注册");
+
+    let client = reqwest::Client::builder()
+        .resolve("zhangsan-api.t.example.com", server.handle.http_addr)
+        .build()
+        .unwrap();
+    let anon = client
+        .get("http://zhangsan-api.t.example.com/")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401, "重新注册之后门还得在");
+    assert!(
+        engine.status().tunnel("api").unwrap().protected,
+        "界面上也还该显示「已设口令」"
+    );
+}

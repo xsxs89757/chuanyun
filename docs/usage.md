@@ -63,8 +63,9 @@ curl -s -X POST localhost:7075/api/tunnels -H 'Content-Type: application/json' \
      -d '[{"port":8082,"name":"api"},{"port":5666,"name":"web"}]'
 ```
 
-Idempotent by name — running the script repeatedly won't pile up duplicate tunnels. To put
-a password on one, add a field:
+Idempotent by name — running the script repeatedly won't pile up duplicate tunnels, and it
+**won't strip a password you set in the client** (re-registering without `auth` keeps the
+existing one). To put a password on one, add a field:
 
 ```bash
 curl -s -X POST localhost:7075/api/tunnels -H 'Content-Type: application/json' \

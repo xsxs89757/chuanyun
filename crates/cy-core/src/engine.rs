@@ -526,9 +526,21 @@ async fn session(
                             let _ = reply.send(Err(cy_proto::error::human(e).to_string()));
                             continue;
                         }
-                        state.upsert_tunnel(&spec, true);
+                        let spec = state.upsert_tunnel(&spec, true);
                         save(state, state_path);
-                        let result = open_and_record(&conn, &spec, status).await;
+                        // 同名隧道已经开着、端口也没变，就直接回成功——
+                        // 脚本每次启动都注册一遍，别每次都关了重开（公网地址会瞬断）。
+                        let already_up = status
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .tunnel(&spec.name)
+                            .map(|t| t.url.is_some() && t.local_port == spec.local_port)
+                            .unwrap_or(false);
+                        let result = if already_up {
+                            Ok(())
+                        } else {
+                            open_and_record(&conn, &spec, status).await
+                        };
                         let _ = reply.send(result);
                     }
                     Cmd::RemoveTunnel { name } => {
@@ -656,7 +668,7 @@ async fn handle_offline_cmd(
             // 报错说"请先登录"然后把用户输入丢掉是最烦人的那种交互。
             match cy_proto::naming::validate_name(&spec.name) {
                 Ok(()) => {
-                    state.upsert_tunnel(&spec, true);
+                    let spec = state.upsert_tunnel(&spec, true);
                     save(state, state_path);
                     set_status(status, |s| {
                         if !s.tunnels.iter().any(|t| t.name == spec.name) {

@@ -138,12 +138,25 @@ impl State {
     }
 
     /// 记下一条隧道。整个 spec 进来，免得新增字段时漏存。
-    pub fn upsert_tunnel(&mut self, spec: &TunnelSpec, enabled: bool) {
+    ///
+    /// 返回实际生效的 spec——口令和自定义域名可能沿用了已有的那份。
+    ///
+    /// **同名隧道已存在、而这次没给口令，就保留原来的口令。** 项目脚本（base 的
+    /// dev.sh、vite 插件）每次启动都按「名字 + 端口」重新注册一遍，它们不知道也
+    /// 不该知道口令——那是隧道主人在客户端里设的。如果注册一次就把口令抹掉，
+    /// 同事设好的门会被自己的启动脚本静默拆掉，还没有任何提示。
+    /// 要真的去掉口令，删掉隧道重建。
+    pub fn upsert_tunnel(&mut self, spec: &TunnelSpec, enabled: bool) -> TunnelSpec {
         let entry = self.tunnels.entry(spec.name.clone()).or_default();
         entry.local_port = spec.local_port;
         entry.enabled = enabled;
-        entry.auth = spec.auth.clone();
-        entry.custom_domain = spec.custom_domain.clone();
+        if spec.auth.is_some() {
+            entry.auth = spec.auth.clone();
+        }
+        if spec.custom_domain.is_some() {
+            entry.custom_domain = spec.custom_domain.clone();
+        }
+        spec_of(&spec.name, entry)
     }
 
     pub fn set_enabled(&mut self, name: &str, enabled: bool) {
@@ -261,6 +274,29 @@ mod tests {
         let reopened = loaded.enabled_tunnels();
         assert_eq!(reopened.len(), 1);
         assert_eq!(reopened[0].auth.as_deref(), Some("demo:s3cret"));
+    }
+
+    /// 脚本每次启动都按「名字 + 端口」重新注册——不带口令的注册不能把已有口令抹掉。
+    #[test]
+    fn re_registering_without_a_password_keeps_the_existing_one() {
+        let mut state = State::default();
+        state.upsert_tunnel(
+            &TunnelSpec::http("api", 8082).with_auth("demo:s3cret"),
+            true,
+        );
+
+        // dev.sh 那种写法：只给名字和端口
+        let effective = state.upsert_tunnel(&TunnelSpec::http("api", 8090), true);
+        assert_eq!(effective.local_port, 8090, "端口要更新");
+        assert_eq!(effective.auth.as_deref(), Some("demo:s3cret"), "口令要保留");
+        assert_eq!(
+            state.spec("api").unwrap().auth.as_deref(),
+            Some("demo:s3cret")
+        );
+
+        // 明确给了新口令就换
+        state.upsert_tunnel(&TunnelSpec::http("api", 8090).with_auth("demo:new"), true);
+        assert_eq!(state.spec("api").unwrap().auth.as_deref(), Some("demo:new"));
     }
 
     /// 没设口令的隧道不该在状态文件里留下 auth 这个键。
