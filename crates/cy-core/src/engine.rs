@@ -121,6 +121,9 @@ enum Cmd {
     SetEnabled {
         name: String,
         enabled: bool,
+        /// 处理完才回——脚本 PATCH {"enabled":false} 之后紧接着就可能退出，
+        /// 得等隧道真的关掉了再返回，不然下一步读状态看到的还是开着的
+        reply: oneshot::Sender<()>,
     },
     /// 改口令；`None` = 去掉口令
     SetAuth {
@@ -235,13 +238,16 @@ impl Engine {
     }
 
     pub async fn set_enabled(&self, name: impl Into<String>, enabled: bool) {
+        let (reply, rx) = oneshot::channel();
         let _ = self
             .cmds
             .send(Cmd::SetEnabled {
                 name: name.into(),
                 enabled,
+                reply,
             })
             .await;
+        let _ = rx.await;
     }
 
     /// 改一条隧道的访问口令（`None` 去掉口令）。地址不变。
@@ -571,17 +577,24 @@ async fn session(
                         }
                         let spec = state.upsert_tunnel(&spec, true);
                         save(state, state_path);
-                        // 同名隧道已经开着、端口也没变，就直接回成功——
-                        // 脚本每次启动都注册一遍，别每次都关了重开（公网地址会瞬断）。
-                        let already_up = status
+                        // 同名隧道已经开着：端口没变就直接回成功——脚本每次启动都
+                        // 注册一遍，别每次都关了重开（公网地址会瞬断）；端口变了
+                        // （dev.sh 自动避让挪到了 5669）就关掉重开指向新端口。
+                        // 两种情况口令都在 state 里原样保留着。
+                        // 这样脚本就不需要「先 DELETE 再 POST」——那会把 state 里的
+                        // 条目连口令一起删掉。
+                        let (is_up, same_port) = status
                             .read()
                             .unwrap_or_else(|e| e.into_inner())
                             .tunnel(&spec.name)
-                            .map(|t| t.url.is_some() && t.local_port == spec.local_port)
-                            .unwrap_or(false);
-                        let result = if already_up {
+                            .map(|t| (t.url.is_some(), t.local_port == spec.local_port))
+                            .unwrap_or((false, false));
+                        let result = if is_up && same_port {
                             Ok(())
                         } else {
+                            if is_up {
+                                conn.close_tunnel(&spec.name).await;
+                            }
                             open_and_record(&conn, &spec, status).await
                         };
                         let _ = reply.send(result);
@@ -629,7 +642,7 @@ async fn session(
                         });
                         let _ = reply.send(result);
                     }
-                    Cmd::SetEnabled { name, enabled } => {
+                    Cmd::SetEnabled { name, enabled, reply } => {
                         state.set_enabled(&name, enabled);
                         save(state, state_path);
                         if enabled {
@@ -646,6 +659,7 @@ async fn session(
                                 }
                             });
                         }
+                        let _ = reply.send(());
                     }
                 }
             }
@@ -779,7 +793,11 @@ async fn handle_offline_cmd(
             save(state, state_path);
             set_status(status, |s| s.tunnels.retain(|t| t.name != name));
         }
-        Cmd::SetEnabled { name, enabled } => {
+        Cmd::SetEnabled {
+            name,
+            enabled,
+            reply,
+        } => {
             state.set_enabled(&name, enabled);
             save(state, state_path);
             set_status(status, |s| {
@@ -787,6 +805,7 @@ async fn handle_offline_cmd(
                     t.enabled = enabled;
                 }
             });
+            let _ = reply.send(());
         }
         Cmd::SetAuth { name, auth, reply } => {
             // 没连上也让改——记进期望态，连上后按新口令开

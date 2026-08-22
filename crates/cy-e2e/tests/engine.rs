@@ -802,3 +802,110 @@ async fn a_package_dropped_in_after_connecting_is_noticed_within_a_heartbeat() {
     assert_eq!(u.version, "99.0.0");
     assert_eq!(u.url.as_deref(), Some("https://t.example.com/download"));
 }
+
+/// dev.sh 端口自动避让后会用新端口重新注册同一个名字。
+/// 要指向新端口，口令还要在——不能靠脚本先 DELETE 再 POST（那会把口令删掉）。
+#[tokio::test]
+async fn re_registering_with_a_new_port_moves_the_tunnel_and_keeps_the_password() {
+    use cy_core::TunnelSpec;
+
+    let server = TestServer::start().await;
+    let token = server.add_user("zhangsan").await;
+    let a = local_http().await;
+    let b = local_http().await;
+
+    let engine = Engine::start(None, brand(&server));
+    engine
+        .login(
+            server.handle.control_addr.to_string(),
+            &token,
+            &server.handle.fingerprint,
+        )
+        .await
+        .expect("登录");
+    engine
+        .add_tunnel_spec(TunnelSpec::http("api", a).with_auth("demo:s3cret"))
+        .await
+        .expect("开隧道");
+    let url = engine.status().tunnel("api").unwrap().url.clone();
+
+    // 端口避让：同名、新端口、不带口令
+    engine.add_tunnel("api", b).await.expect("换端口重注册");
+
+    let status = engine.status();
+    let t = status.tunnel("api").unwrap();
+    assert_eq!(t.local_port, b, "要指向新端口");
+    assert_eq!(t.url, url, "地址不变");
+    assert!(t.protected, "口令还在");
+
+    let client = reqwest::Client::builder()
+        .resolve("zhangsan-api.t.example.com", server.handle.http_addr)
+        .build()
+        .unwrap();
+    let anon = client
+        .get("http://zhangsan-api.t.example.com/")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401, "换端口之后门还在");
+    let ok = client
+        .get("http://zhangsan-api.t.example.com/")
+        .basic_auth("demo", Some("s3cret"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200, "新端口上的服务能通");
+}
+
+/// 脚本退出时把隧道关掉（而不是删掉），下次注册原地打开，口令还在。
+///
+/// dev.sh 和 vite 插件原来退出时 DELETE，把用户在客户端设的口令一起删了，
+/// 下次回来的是一条没门的隧道。现在它们 PATCH {"enabled":false}。
+#[tokio::test]
+async fn switching_a_tunnel_off_and_re_registering_keeps_the_password() {
+    use cy_core::TunnelSpec;
+
+    let server = TestServer::start().await;
+    let token = server.add_user("zhangsan").await;
+    let http = local_http().await;
+
+    let engine = Engine::start(None, brand(&server));
+    engine
+        .login(
+            server.handle.control_addr.to_string(),
+            &token,
+            &server.handle.fingerprint,
+        )
+        .await
+        .expect("登录");
+    engine
+        .add_tunnel_spec(TunnelSpec::http("admin", http).with_auth("demo:s3cret"))
+        .await
+        .expect("开隧道");
+
+    // dev.sh 退出
+    engine.set_enabled("admin", false).await;
+    let st = engine.status();
+    let t = st.tunnel("admin").expect("关掉之后还在列表里");
+    assert!(!t.enabled);
+    assert!(t.url.is_none(), "关掉的隧道没有公网地址");
+    assert!(t.protected, "口令还在");
+
+    // 下次 dev.sh 启动：只给名字和端口
+    engine.add_tunnel("admin", http).await.expect("重新注册");
+    let st = engine.status();
+    let t = st.tunnel("admin").unwrap();
+    assert!(t.enabled && t.url.is_some(), "原地打开");
+    assert!(t.protected, "口令没丢");
+
+    let client = reqwest::Client::builder()
+        .resolve("zhangsan-admin.t.example.com", server.handle.http_addr)
+        .build()
+        .unwrap();
+    let anon = client
+        .get("http://zhangsan-admin.t.example.com/")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401, "门还在");
+}

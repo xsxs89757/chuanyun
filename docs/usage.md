@@ -63,9 +63,16 @@ curl -s -X POST localhost:7075/api/tunnels -H 'Content-Type: application/json' \
      -d '[{"port":8082,"name":"api"},{"port":5666,"name":"web"}]'
 ```
 
-Idempotent by name — running the script repeatedly won't pile up duplicate tunnels, and it
-**won't strip a password you set in the client** (re-registering without `auth` keeps the
-existing one). To put a password on one, add a field:
+Idempotent by name — running the script repeatedly won't pile up duplicate tunnels, a changed
+port is picked up, and it **won't strip a password you set in the client** (re-registering
+without `auth` keeps the existing one).
+
+When your script exits, **switch the tunnel off with `PATCH {"enabled":false}` rather than
+`DELETE`** — DELETE removes the tunnel together with its password, so the next run comes back
+without a door. A switched-off tunnel stays in the list and is turned back on by the next
+registration.
+
+To put a password on one, add a field:
 
 ```bash
 curl -s -X POST localhost:7075/api/tunnels -H 'Content-Type: application/json' \
@@ -105,7 +112,7 @@ BASE=$(curl -sf 'localhost:7075/api/resolve?port=8082&plain=1' || echo "http://1
 | `GET /api/tunnels` | All current tunnels |
 | `POST /api/tunnels` | Register a tunnel; an object or an array. Optional `auth` (password), `domain` (custom domain) |
 | `DELETE /api/tunnels/{name}` | Unregister |
-| `PATCH /api/tunnels/{name}` | Change the password: `{"auth":"user:password"}`; `""` removes it. Address unchanged |
+| `PATCH /api/tunnels/{name}` | Change the password `{"auth":"user:password"}` (`""` removes it); switch on/off `{"enabled":false}`. Address unchanged |
 | `GET /api/resolve?port=N` | The address this port is reachable at; add `&plain=1` for plain text |
 | `GET /api/requests` | Recorded requests; `?tunnel=name` to filter |
 | `GET /api/requests/{id}` | One request in full |
@@ -132,10 +139,19 @@ your local service.
 `demo:s3cret` into the password box is the classic mistake and makes the prompt reappear
 forever. The tunnel's card shows the username so you don't have to guess.
 
-Once past the gate, the `Authorization` header is consumed by chuanyun and **not forwarded to
-your local service** — your backend keeps using its own login and tokens and never sees a
-stray `Basic` header. Tunnels without a password pass the header through untouched (that's
-what lets a mobile app call your API with a Bearer token).
+**You're asked once.** After the first successful Basic login, chuanyun sets a cookie (valid
+for that tunnel's host only) and accepts the cookie from then on — your app's own
+`Authorization: Bearer …` passes through untouched and its login state is unaffected. This is
+why the gate can't simply check Basic on every request: the `Authorization` header holds one
+value, and apps that attach their own token after login (vben and friends) would fight with
+it — the symptom is a browser prompt that keeps coming back no matter what you type.
+
+Once past the gate, the Basic header itself is consumed and **not forwarded to your local
+service**; tunnels without a password don't touch the header at all (that's what lets a
+mobile app call your API with a Bearer token).
+
+Changing the password or restarting the server invalidates the cookie; the browser asks once
+more.
 
 A protected tunnel's card is marked **"password set"** — glance at it before sending the
 address to someone, so they aren't met with a prompt you forgot about. The password is saved

@@ -232,41 +232,57 @@ async fn create_tunnels(
 #[serde(deny_unknown_fields)]
 struct TunnelPatch {
     /// 新口令；传空字符串表示去掉口令
+    #[serde(default)]
     auth: Option<String>,
+    /// 开/关。脚本退出时用 `false` 把隧道关掉而不是 DELETE——DELETE 会把这条隧道
+    /// 连同用户在客户端设的口令一起删掉，下次启动回来的就是一条没门的隧道。
+    #[serde(default)]
+    enabled: Option<bool>,
 }
 
-/// 改一条隧道的口令，地址不变。
+/// 改一条隧道的口令或开关，地址不变。
 async fn update_tunnel(
     State(engine): State<Arc<Engine>>,
     axum::extract::Path(name): axum::extract::Path<String>,
     Json(body): Json<TunnelPatch>,
 ) -> Response {
-    let Some(auth) = body.auth else {
-        return (StatusCode::BAD_REQUEST, "要改什么？目前只支持 auth\n").into_response();
-    };
-    let auth = if auth.trim().is_empty() {
-        None
-    } else {
-        if !auth.contains(':') {
-            return (StatusCode::BAD_REQUEST, "口令要写成 用户名:口令\n").into_response();
-        }
-        Some(auth)
-    };
-    match engine.set_auth(&name, auth).await {
-        Ok(()) => {
-            let protected = engine
-                .status()
-                .tunnel(&name)
-                .map(|t| t.protected)
-                .unwrap_or(false);
-            Json(serde_json::json!({ "ok": true, "protected": protected })).into_response()
-        }
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "ok": false, "error": e })),
-        )
-            .into_response(),
+    if body.auth.is_none() && body.enabled.is_none() {
+        return (StatusCode::BAD_REQUEST, "要改什么？支持 auth、enabled\n").into_response();
     }
+    if engine.status().tunnel(&name).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "ok": false, "error": format!("没有叫 {name} 的隧道") })),
+        )
+            .into_response();
+    }
+    if let Some(auth) = body.auth {
+        let auth = if auth.trim().is_empty() {
+            None
+        } else {
+            if !auth.contains(':') {
+                return (StatusCode::BAD_REQUEST, "口令要写成 用户名:口令\n").into_response();
+            }
+            Some(auth)
+        };
+        if let Err(e) = engine.set_auth(&name, auth).await {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "ok": false, "error": e })),
+            )
+                .into_response();
+        }
+    }
+    if let Some(enabled) = body.enabled {
+        engine.set_enabled(&name, enabled).await;
+    }
+    let t = engine.status().tunnel(&name).cloned();
+    Json(serde_json::json!({
+        "ok": true,
+        "protected": t.as_ref().map(|t| t.protected).unwrap_or(false),
+        "enabled": t.as_ref().map(|t| t.enabled).unwrap_or(false),
+    }))
+    .into_response()
 }
 
 async fn remove_tunnel(

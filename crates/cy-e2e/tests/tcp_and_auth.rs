@@ -367,3 +367,122 @@ async fn the_gate_consumes_the_authorization_header() {
         "没设口令：Authorization 原样透传，手机 app 调 API 靠它"
     );
 }
+
+/// 门发 cookie，之后认 cookie；应用自己的 Authorization 头原样放行。
+///
+/// 真机上的死循环：vben 登录后每个 API 请求都带 `Authorization: Bearer <jwt>`，
+/// 只认 Basic 的门看到 Bearer 就 401 弹框，用户填对了这一个请求过了门、
+/// 可 Bearer 没了，后端登录态又丢 → 刷新 → 再弹。
+#[tokio::test]
+async fn the_gate_issues_a_cookie_and_lets_the_apps_own_bearer_through() {
+    use axum::{http::HeaderMap, routing::get, Router};
+
+    let app = Router::new().route(
+        "/",
+        get(|h: HeaderMap| async move {
+            h.get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("<none>")
+                .to_string()
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(l, app).await;
+    });
+
+    let server = TestServer::start().await;
+    let token = server.add_user("zhangsan").await;
+    let (events, _rx) = tokio::sync::broadcast::channel(64);
+    let conn = cy_core::connect(&server.client_config(&token), events, Default::default())
+        .await
+        .unwrap();
+    conn.open_tunnel(TunnelSpec::http("app", port).with_auth("demo:s3cret"))
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::builder()
+        .resolve("zhangsan-app.t.example.com", server.handle.http_addr)
+        .build()
+        .unwrap();
+    let url = "http://zhangsan-app.t.example.com/";
+
+    // 1. 登录后的 SPA：只带 Bearer，没 cookie → 要口令（浏览器会弹一次框）
+    let r = client
+        .get(url)
+        .header("authorization", "Bearer jwt-xyz")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+
+    // 2. 浏览器答了框：Basic 通过 → 200，并且发了 cookie
+    let r = client
+        .get(url)
+        .basic_auth("demo", Some("s3cret"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let cookie = r
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .expect("Basic 通过后要发 cookie")
+        .to_string();
+    assert!(cookie.starts_with("chuanyun_auth="), "{cookie}");
+    assert!(cookie.contains("HttpOnly"), "{cookie}");
+    assert!(
+        !cookie.contains("Domain="),
+        "要 host-only，别的隧道拿不到: {cookie}"
+    );
+    let ticket = cookie.split(';').next().unwrap().to_string();
+
+    // 3. 之后的 API 请求：cookie + 应用自己的 Bearer → 放行，且 Bearer 原样到达本地服务
+    let r = client
+        .get(url)
+        .header("cookie", &ticket)
+        .header("authorization", "Bearer jwt-xyz")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "有 cookie 就不该再要口令");
+    assert_eq!(
+        r.text().await.unwrap(),
+        "Bearer jwt-xyz",
+        "应用自己的 Authorization 必须原样到达"
+    );
+
+    // 4. cookie + 浏览器顺手带的 Basic → 放行，Basic 被吃掉
+    let r = client
+        .get(url)
+        .header("cookie", &ticket)
+        .basic_auth("demo", Some("s3cret"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.text().await.unwrap(), "<none>");
+
+    // 5. 伪造的 cookie 不行
+    let r = client
+        .get(url)
+        .header("cookie", "chuanyun_auth=deadbeef")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+
+    // 6. 改了口令，旧 cookie 立刻失效
+    conn.close_tunnel("app").await;
+    conn.open_tunnel(TunnelSpec::http("app", port).with_auth("demo:changed"))
+        .await
+        .unwrap();
+    let r = client
+        .get(url)
+        .header("cookie", &ticket)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401, "改口令后旧 cookie 不能再用");
+}

@@ -229,7 +229,11 @@ async function request<T>(url: string, init: RequestInit): Promise<T | undefined
  * 同步注销。
  *
  * 进程退出时事件循环已经不转了，异步请求发不出去。这里借 curl 同步发一枪。
- * 注销失败也不致命——同名隧道会在下次注册时被覆盖——但能让列表干净些。
+ *
+ * 是**关掉**，不是 DELETE：DELETE 会把这条隧道连同用户在穿云客户端里给它设的
+ * 访问口令一起删掉，下次 dev server 起来就是一条没门的隧道。关掉的隧道留在
+ * 客户端列表里（开关是关的、口令还在），下次注册时原地打开。
+ * 失败也不致命——同名隧道会在下次注册时被接管——但能让列表干净些。
  */
 function unregisterSync(apiPort: number, name: string): void {
   try {
@@ -241,7 +245,11 @@ function unregisterSync(apiPort: number, name: string): void {
         '-m',
         '2',
         '-X',
-        'DELETE',
+        'PATCH',
+        '-H',
+        'Content-Type: application/json',
+        '-d',
+        '{"enabled":false}',
         `http://127.0.0.1:${apiPort}/api/tunnels/${encodeURIComponent(name)}`,
       ],
       { stdio: 'ignore' },

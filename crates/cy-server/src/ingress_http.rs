@@ -42,6 +42,9 @@ type Body = BoxBody<Bytes, hyper::Error>;
 struct Ctx {
     config: Arc<Config>,
     registry: Arc<Registry>,
+    /// 签访问口令 cookie 用的密钥。每次启动随机生成：服务端重启后旧 cookie 全部失效，
+    /// 用户被多问一次口令——代价很小，省掉了持久化密钥这件事。
+    gate_secret: [u8; 32],
 }
 
 pub async fn serve(
@@ -59,7 +62,11 @@ pub async fn serve(
         }
     };
 
-    let ctx = Arc::new(Ctx { config, registry });
+    let ctx = Arc::new(Ctx {
+        config,
+        registry,
+        gate_secret: rand::random(),
+    });
 
     loop {
         let (socket, peer) = tokio::select! {
@@ -151,22 +158,38 @@ async fn handle(mut req: Request<Incoming>, peer: SocketAddr, ctx: Arc<Ctx>) -> 
 
     // 隧道设了口令就先过这一关。校验放在开数据流之前——没通过的请求
     // 根本不该打扰到用户的本地服务。
+    //
+    // 门认两样东西：cookie，或者 Basic 头。**cookie 才是主角**——
+    // Basic 只用来换 cookie。原因：`Authorization` 这个头一次只能放一个值，
+    // 应用自己常常要用它（vben 登录后每个 API 请求都带 `Bearer <jwt>`）。
+    // 只认 Basic 的门看到 Bearer 就 401，浏览器弹框，用户填对了这一个请求
+    // 过了门、可 Bearer 没了，后端登录态又丢 → 刷新 → 再弹。真机上撞到的死循环。
+    // 第一次 Basic 通过就发 cookie，之后认 cookie，应用的 Authorization 头原样放行。
+    let mut set_cookie: Option<HeaderValue> = None;
     if let Some(expected) = &tunnel.auth {
-        if !basic_auth_ok(&req, expected) {
+        let token = gate_token(&ctx.gate_secret, &host, expected);
+        if gate_cookie_ok(&req, &token) {
+            // cookie 放行。浏览器可能还会顺手带上缓存的 Basic——那是给我们的，
+            // 吃掉；别的（Bearer 等）是应用的，不碰。
+            strip_basic_authorization(&mut req);
+        } else if basic_auth_ok(&req, expected) {
+            req.headers_mut().remove(hyper::header::AUTHORIZATION);
+            set_cookie = Some(gate_cookie_header(&token, &ctx.config));
+        } else {
             return unauthorized();
         }
-        // 过了门就把这个头吃掉。它是给我们这道门的，不是给后面那个应用的：
-        // 原样转过去，后端的 JWT 中间件会看到一个 `Basic` 头而不是 `Bearer`，
-        // 真机上 base 的后端就是这么被搞糊涂的。没设口令的隧道不碰这个头——
-        // 手机 app 拿 Bearer token 穿隧道调 API，靠的就是它原样透传。
-        req.headers_mut().remove(hyper::header::AUTHORIZATION);
     }
 
     let client_ip = real_client_ip(&req, peer.ip(), &ctx.config);
     set_forwarded_headers(&mut req, client_ip, &ctx.config);
 
     match forward(req, &tunnel, client_ip).await {
-        Ok(resp) => resp,
+        Ok(mut resp) => {
+            if let Some(c) = set_cookie {
+                resp.headers_mut().append(hyper::header::SET_COOKIE, c);
+            }
+            resp
+        }
         Err(e) => {
             tracing::warn!(%host, error = %e, "转发失败");
             error_page(
@@ -278,6 +301,62 @@ fn set_forwarded_headers<B>(req: &mut Request<B>, client_ip: IpAddr, config: &Co
     }
     // Host 保持原样：本地服务看到的是隧道域名，它据此生成的绝对地址才是对的。
     // 前端 dev server 的 allowedHosts 检查也依赖这一点。
+}
+
+const GATE_COOKIE: &str = "chuanyun_auth";
+
+/// 口令 cookie 的值：HMAC(密钥, 主机名 + 口令哈希)。
+///
+/// 把口令哈希混进去，改口令就让旧 cookie 全部失效；把主机名混进去，
+/// 一条隧道的 cookie 拿到另一条上没用（cookie 本身也是 host-only，双保险）。
+fn gate_token(secret: &[u8; 32], host: &str, expected_auth: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::{Digest, Sha256};
+    let auth_hash = Sha256::digest(expected_auth.as_bytes());
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC 接受任意长度密钥");
+    mac.update(host.as_bytes());
+    mac.update(b"\0");
+    mac.update(&auth_hash);
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// 请求里带的 cookie 是不是有效的门票。
+fn gate_cookie_ok<B>(req: &Request<B>, token: &str) -> bool {
+    req.headers()
+        .get_all(hyper::header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|line| line.split(';'))
+        .filter_map(|kv| kv.trim().split_once('='))
+        .filter(|(k, _)| *k == GATE_COOKIE)
+        .any(|(_, v)| constant_time_eq(v.trim().as_bytes(), token.as_bytes()))
+}
+
+/// 发门票。host-only（不写 Domain），别的隧道拿不到；HttpOnly，页面脚本读不到；
+/// 走 https 时标 Secure；SameSite=Lax 足够——这不是 CSRF 防线，只是门票。
+fn gate_cookie_header(token: &str, config: &Config) -> HeaderValue {
+    let secure = if config.http.public_scheme.eq_ignore_ascii_case("https") {
+        "; Secure"
+    } else {
+        ""
+    };
+    // 30 天。改口令或服务端重启都会让它提前失效，所以长一点没关系
+    let value =
+        format!("{GATE_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{secure}");
+    HeaderValue::from_str(&value).expect("cookie 值只有十六进制和 ASCII 属性")
+}
+
+/// 只剥掉 Basic 形式的 Authorization——那是给门的；Bearer 等是应用的，留着。
+fn strip_basic_authorization<B>(req: &mut Request<B>) {
+    let is_basic = req
+        .headers()
+        .get(hyper::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|h| h.len() >= 6 && h[..6].eq_ignore_ascii_case("basic "))
+        .unwrap_or(false);
+    if is_basic {
+        req.headers_mut().remove(hyper::header::AUTHORIZATION);
+    }
 }
 
 /// 校验 Basic 认证头是否匹配隧道设置的口令。
