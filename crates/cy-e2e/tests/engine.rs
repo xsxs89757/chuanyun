@@ -753,3 +753,52 @@ async fn changing_the_password_keeps_the_address_and_takes_effect_at_once() {
     // 改不存在的隧道要报错，不是静默成功
     assert!(engine.set_auth("nope", Some("a:b".into())).await.is_err());
 }
+
+/// 连着不断的客户端也要知道有新包。
+///
+/// 真机上撞到的：服务端升级重启，客户端立刻重连，握手那一刻目录里还是旧包；
+/// 五秒后新包放进去——而客户端再也不重连了，提示永远出不来。
+/// 现在心跳每次带最新版本，放进去十几秒内就能看到。
+#[tokio::test]
+async fn a_package_dropped_in_after_connecting_is_noticed_within_a_heartbeat() {
+    let downloads = tempfile::tempdir().unwrap();
+    let dl = downloads.path().to_path_buf();
+    let server = TestServer::start_with(move |c| {
+        c.admin.download_dir = Some(dl);
+        c.admin.download_url = Some("https://t.example.com/download".into());
+        c.control.heartbeat_secs = 1;
+    })
+    .await;
+    let token = server.add_user("zhangsan").await;
+
+    let engine = Engine::start(None, brand(&server));
+    engine
+        .login(
+            server.handle.control_addr.to_string(),
+            &token,
+            &server.handle.fingerprint,
+        )
+        .await
+        .expect("登录");
+    assert!(
+        engine.status().update.is_none(),
+        "连上时目录是空的，不该提示"
+    );
+
+    // 管理员这时候才把新包放进去
+    std::fs::write(
+        downloads.path().join("chuanyun-99.0.0-macos-universal.dmg"),
+        b"x",
+    )
+    .unwrap();
+
+    wait_for(
+        "心跳把新版本带过来",
+        Duration::from_secs(10),
+        || engine.status().update.is_some(),
+    )
+    .await;
+    let u = engine.status().update.unwrap();
+    assert_eq!(u.version, "99.0.0");
+    assert_eq!(u.url.as_deref(), Some("https://t.example.com/download"));
+}

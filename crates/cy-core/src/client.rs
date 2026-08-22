@@ -155,7 +155,16 @@ pub struct Connection {
     pub latest_client: Option<String>,
     /// 有新版时去哪下载
     pub download_url: Option<String>,
+    /// 之后每次心跳刷新的最新版本信息；引擎盯着它，连着不断也能知道有新包
+    latest: tokio::sync::watch::Receiver<LatestClient>,
     cancel: CancellationToken,
+}
+
+/// 服务端最近一次心跳里报的最新客户端版本。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LatestClient {
+    pub version: Option<String>,
+    pub download_url: Option<String>,
 }
 
 enum Command {
@@ -188,6 +197,11 @@ impl Connection {
 
     pub fn disconnect(&self) {
         self.cancel.cancel();
+    }
+
+    /// 订阅心跳带来的最新版本信息。
+    pub fn latest_client_updates(&self) -> tokio::sync::watch::Receiver<LatestClient> {
+        self.latest.clone()
     }
 
     pub fn is_alive(&self) -> bool {
@@ -312,11 +326,16 @@ pub async fn connect(
         inspector,
         cancel.clone(),
     ));
+    let (latest_tx, latest_rx) = tokio::sync::watch::channel(LatestClient {
+        version: latest_client.clone(),
+        download_url: download_url.clone(),
+    });
     tokio::spawn(control_loop(
         framed,
         cmd_rx,
         ports,
         events.clone(),
+        latest_tx,
         cancel.clone(),
     ));
 
@@ -331,6 +350,7 @@ pub async fn connect(
         session,
         latest_client,
         download_url,
+        latest: latest_rx,
         cancel,
     })
 }
@@ -341,6 +361,7 @@ async fn control_loop(
     mut commands: mpsc::Receiver<Command>,
     ports: PortMap,
     events: broadcast::Sender<Event>,
+    latest: tokio::sync::watch::Sender<LatestClient>,
     cancel: CancellationToken,
 ) {
     let (mut sink, mut stream) = framed.split();
@@ -389,9 +410,16 @@ async fn control_loop(
                     Err(e) => break format!("控制流出错: {e}"),
                 };
                 match msg {
-                    ServerMsg::Ping { seq } => {
+                    ServerMsg::Ping { seq, latest_client, download_url } => {
                         if sink.send(ClientMsg::Pong { seq }).await.is_err() {
                             break "连接已断开".to_string();
+                        }
+                        // 老服务端的 ping 没这字段，别把 welcome 里拿到的覆盖成空
+                        if latest_client.is_some() {
+                            latest.send_if_modified(|cur| {
+                                let next = LatestClient { version: latest_client, download_url };
+                                if *cur == next { false } else { *cur = next; true }
+                            });
                         }
                     }
                     ServerMsg::Pong { .. } => {}

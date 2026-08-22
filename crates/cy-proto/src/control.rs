@@ -134,6 +134,14 @@ pub enum ServerMsg {
 
     Ping {
         seq: u64,
+        /// 顺带告诉客户端服务端上最新的安装包版本。
+        ///
+        /// welcome 里也有这一项，但那是一次性的：连着不断的客户端永远看不到
+        /// 之后才放进目录的新包。心跳每十几秒一次，借它刷新一遍正好。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latest_client: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        download_url: Option<String>,
     },
     Pong {
         seq: u64,
@@ -189,6 +197,23 @@ mod tests {
             download_url: Some("https://t.example.com/download".into()),
         };
         assert_eq!(roundtrip_server(&welcome), welcome);
+
+        // 心跳也带版本；老服务端的裸 ping 也要能解析
+        let ping = ServerMsg::Ping {
+            seq: 7,
+            latest_client: Some("0.2.0".into()),
+            download_url: None,
+        };
+        assert_eq!(roundtrip_server(&ping), ping);
+        let bare: ServerMsg = serde_json::from_str(r#"{"type":"ping","seq":7}"#).unwrap();
+        assert!(matches!(
+            bare,
+            ServerMsg::Ping {
+                seq: 7,
+                latest_client: None,
+                ..
+            }
+        ));
 
         // 老服务端不发这两个字段，新客户端要能照常解析
         let old_style = r#"{"type":"welcome","session":"s","server":"0.1.0","heartbeat_secs":15,"domain_suffix":"t.example.com"}"#;

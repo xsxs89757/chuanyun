@@ -147,8 +147,8 @@ sudo chown -R chuanyun:chuanyun /var/lib/chuanyun/downloads
 ```
 
 Only `.dmg`, `.msi`, and `.exe` are recognised; anything else there is neither listed nor
-downloadable. **The packages here also drive the client's update prompt** — the next client
-to connect sees "update available". Remove the old ones when you ship a new version:
+downloadable. **The packages here also drive the client's update prompt** — connected clients
+see "update available" within seconds. Remove the old ones when you ship a new version:
 
 ```bash
 sudo rm -f /var/lib/chuanyun/downloads/*0.1.3*

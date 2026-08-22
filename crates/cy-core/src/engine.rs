@@ -361,14 +361,7 @@ async fn supervisor(
                 // 服务端那边最新的包比我新，就记下来给界面提示。
                 // 比较用 update 模块那套（去 v 前缀、按数字比），别按字符串比——
                 // "0.1.10" 按字符串是小于 "0.1.9" 的。
-                let update = conn.latest_client.as_ref().and_then(|latest| {
-                    crate::update::is_newer(latest, env!("CARGO_PKG_VERSION")).then(|| {
-                        UpdateAvailable {
-                            version: latest.clone(),
-                            url: conn.download_url.clone(),
-                        }
-                    })
-                });
+                let update = update_from(conn.latest_client.as_deref(), conn.download_url.clone());
                 if let Some(u) = &update {
                     tracing::info!(version = %u.version, "服务端上有新版客户端");
                 }
@@ -500,10 +493,23 @@ async fn session(
     // 这时连接多半已经死了，与其等心跳超时，不如立刻去探一下。
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // 心跳每次都带最新版本。连着不断的客户端就靠它知道管理员刚放了新包——
+    // 否则只有重连那一下看得到，一连一星期的人永远收不到提示。
+    let mut latest = conn.latest_client_updates();
     let mut last_check = (Instant::now(), SystemTime::now());
 
     loop {
         tokio::select! {
+            changed = latest.changed() => {
+                if changed.is_ok() {
+                    let l = latest.borrow_and_update().clone();
+                    let update = update_from(l.version.as_deref(), l.download_url);
+                    if let Some(u) = &update {
+                        tracing::info!(version = %u.version, "心跳里得知服务端上有新版客户端");
+                    }
+                    set_status(status, |s| s.update = update);
+                }
+            }
             _ = tick.tick() => {
                 let now = (Instant::now(), SystemTime::now());
                 let mono = now.0.duration_since(last_check.0);
@@ -633,6 +639,18 @@ async fn session(
             }
         }
     }
+}
+
+/// 服务端报的最新版本比我新，就是一次可提示的更新。
+///
+/// 比较用 update 模块那套（去 v 前缀、按数字比），别按字符串比——
+/// "0.1.10" 按字符串是小于 "0.1.9" 的。
+fn update_from(latest: Option<&str>, url: Option<String>) -> Option<UpdateAvailable> {
+    let latest = latest?;
+    crate::update::is_newer(latest, env!("CARGO_PKG_VERSION")).then(|| UpdateAvailable {
+        version: latest.to_string(),
+        url,
+    })
 }
 
 fn spec_enabled(state: &State, name: &str) -> bool {

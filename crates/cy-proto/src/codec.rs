@@ -110,17 +110,41 @@ mod tests {
     fn decodes_multiple_messages_from_one_buffer() {
         let mut buf = BytesMut::new();
         let mut enc = ServerSide::new();
-        enc.encode(ServerMsg::Ping { seq: 1 }, &mut buf).unwrap();
-        enc.encode(ServerMsg::Ping { seq: 2 }, &mut buf).unwrap();
+        enc.encode(
+            ServerMsg::Ping {
+                seq: 1,
+                latest_client: None,
+                download_url: None,
+            },
+            &mut buf,
+        )
+        .unwrap();
+        enc.encode(
+            ServerMsg::Ping {
+                seq: 2,
+                latest_client: None,
+                download_url: None,
+            },
+            &mut buf,
+        )
+        .unwrap();
 
         let mut dec = ClientSide::new();
         assert_eq!(
             dec.decode(&mut buf).unwrap(),
-            Some(ServerMsg::Ping { seq: 1 })
+            Some(ServerMsg::Ping {
+                seq: 1,
+                latest_client: None,
+                download_url: None
+            })
         );
         assert_eq!(
             dec.decode(&mut buf).unwrap(),
-            Some(ServerMsg::Ping { seq: 2 })
+            Some(ServerMsg::Ping {
+                seq: 2,
+                latest_client: None,
+                download_url: None
+            })
         );
         assert_eq!(dec.decode(&mut buf).unwrap(), None);
     }
@@ -134,7 +158,11 @@ mod tests {
         buf.extend_from_slice(b"\n");
         assert_eq!(
             dec.decode(&mut buf).unwrap(),
-            Some(ServerMsg::Ping { seq: 1 })
+            Some(ServerMsg::Ping {
+                seq: 1,
+                latest_client: None,
+                download_url: None
+            })
         );
     }
 

@@ -306,7 +306,14 @@ where
                 }
                 seq += 1;
                 unanswered += 1;
-                if outbox.send(ServerMsg::Ping { seq }).await.is_err() {
+                // 每次心跳读一下目录：几个文件的 readdir 是微秒级的事，
+                // 比起缓存还要想什么时候失效，直接读简单得多
+                let ping = ServerMsg::Ping {
+                    seq,
+                    latest_client: config.latest_client_version(),
+                    download_url: config.admin.download_url.clone(),
+                };
+                if outbox.send(ping).await.is_err() {
                     return Ok(());
                 }
             }
