@@ -72,6 +72,11 @@ pub struct TunnelStatus {
     pub url: Option<String>,
     /// 开通失败的原因
     pub error: Option<String>,
+    /// 设了访问口令。
+    ///
+    /// 界面要靠它显示「已设口令」——设了口令却看不出来，忘了就要命：
+    /// 发地址给别人却不知道对方会被要口令。口令本身不进状态（那是给界面看的）。
+    pub protected: bool,
 }
 
 enum Cmd {
@@ -83,8 +88,7 @@ enum Cmd {
     },
     Logout,
     AddTunnel {
-        name: String,
-        local_port: u16,
+        spec: TunnelSpec,
         reply: oneshot::Sender<Result<(), String>>,
     },
     RemoveTunnel {
@@ -176,13 +180,18 @@ impl Engine {
 
     /// 新增一条隧道并立刻开通。
     pub async fn add_tunnel(&self, name: impl Into<String>, local_port: u16) -> Result<(), String> {
+        self.add_tunnel_spec(TunnelSpec::http(name, local_port))
+            .await
+    }
+
+    /// 新增一条隧道，可以带访问口令或自定义域名。
+    ///
+    /// 走完整的 spec，不是 (name, port) 两个参数——访问口令和自定义域名
+    /// 就是因为这条路只传了名字和端口，一路被丢到了协议层之前。
+    pub async fn add_tunnel_spec(&self, spec: TunnelSpec) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         self.cmds
-            .send(Cmd::AddTunnel {
-                name: name.into(),
-                local_port,
-                reply,
-            })
+            .send(Cmd::AddTunnel { spec, reply })
             .await
             .map_err(|_| "引擎已停止".to_string())?;
         rx.await.map_err(|_| "引擎已停止".to_string())?
@@ -483,14 +492,13 @@ async fn session(
                         let _ = reply.send(Ok(()));
                         return SessionEnd::Dropped("切换账号".into());
                     }
-                    Cmd::AddTunnel { name, local_port, reply } => {
-                        if let Err(e) = cy_proto::naming::validate_name(&name) {
+                    Cmd::AddTunnel { spec, reply } => {
+                        if let Err(e) = cy_proto::naming::validate_name(&spec.name) {
                             let _ = reply.send(Err(cy_proto::error::human(e).to_string()));
                             continue;
                         }
-                        state.upsert_tunnel(&name, local_port, true);
+                        state.upsert_tunnel(&spec, true);
                         save(state, state_path);
-                        let spec = TunnelSpec::http(&name, local_port);
                         let result = open_and_record(&conn, &spec, status).await;
                         let _ = reply.send(result);
                     }
@@ -517,8 +525,8 @@ async fn session(
                         state.set_enabled(&name, enabled);
                         save(state, state_path);
                         if enabled {
-                            if let Some(entry) = state.tunnels.get(&name) {
-                                let spec = TunnelSpec::http(&name, entry.local_port);
+                            // 从 state 取完整定义，别现拼——口令和自定义域名都在里面
+                            if let Some(spec) = state.spec(&name) {
                                 let _ = open_and_record(&conn, &spec, status).await;
                             }
                         } else {
@@ -553,6 +561,7 @@ async fn open_and_record(
                     enabled: true,
                     url: None,
                     error: None,
+                    protected: spec.auth.is_some(),
                 });
                 s.tunnels.last_mut().expect("刚推入")
             }
@@ -613,25 +622,22 @@ async fn handle_offline_cmd(
             state.token.clear();
             save(state, state_path);
         }
-        Cmd::AddTunnel {
-            name,
-            local_port,
-            reply,
-        } => {
+        Cmd::AddTunnel { spec, reply } => {
             // 没连上也让加——记进期望态，连上后自动开通。
             // 报错说"请先登录"然后把用户输入丢掉是最烦人的那种交互。
-            match cy_proto::naming::validate_name(&name) {
+            match cy_proto::naming::validate_name(&spec.name) {
                 Ok(()) => {
-                    state.upsert_tunnel(&name, local_port, true);
+                    state.upsert_tunnel(&spec, true);
                     save(state, state_path);
                     set_status(status, |s| {
-                        if !s.tunnels.iter().any(|t| t.name == name) {
+                        if !s.tunnels.iter().any(|t| t.name == spec.name) {
                             s.tunnels.push(TunnelStatus {
-                                name: name.clone(),
-                                local_port,
+                                name: spec.name.clone(),
+                                local_port: spec.local_port,
                                 enabled: true,
                                 url: None,
                                 error: None,
+                                protected: spec.auth.is_some(),
                             });
                         }
                     });
@@ -784,6 +790,7 @@ pub fn tunnels_from_state(state: &State) -> Vec<TunnelStatus> {
             enabled: e.enabled,
             url: None,
             error: None,
+            protected: e.auth.is_some(),
         })
         .collect()
 }
@@ -839,6 +846,7 @@ mod tests {
                     enabled: true,
                     url: Some("https://zhangsan-api.t.example.com".into()),
                     error: None,
+                    protected: false,
                 },
                 TunnelStatus {
                     name: "web".into(),
@@ -846,6 +854,7 @@ mod tests {
                     enabled: true,
                     url: None,
                     error: None,
+                    protected: false,
                 },
             ],
             ..Default::default()

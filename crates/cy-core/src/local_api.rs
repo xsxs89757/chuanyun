@@ -105,6 +105,8 @@ struct TunnelBody {
     url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// 设了访问口令（口令本身不回显）
+    protected: bool,
 }
 
 async fn list_tunnels(State(engine): State<Arc<Engine>>) -> Json<Vec<TunnelBody>> {
@@ -119,12 +121,14 @@ async fn list_tunnels(State(engine): State<Arc<Engine>>) -> Json<Vec<TunnelBody>
                 enabled: t.enabled,
                 url: t.url,
                 error: t.error,
+                protected: t.protected,
             })
             .collect(),
     )
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NewTunnel {
     port: u16,
     /// 不填就按端口自动生成，如 `p5678`。
@@ -133,6 +137,12 @@ struct NewTunnel {
     /// 但对人重要，所以生成的名字也得是能看懂的。
     #[serde(default)]
     name: Option<String>,
+    /// 访问口令，`用户名:口令`。给隧道加一道门。
+    #[serde(default)]
+    auth: Option<String>,
+    /// 自定义域名（要管理员先登记给本人）。
+    #[serde(default)]
+    domain: Option<String>,
 }
 
 /// 接受单个对象或数组，脚本里两种写法都自然。
@@ -165,8 +175,15 @@ async fn create_tunnels(
     let mut results = Vec::new();
     for item in items {
         let name = item.name.unwrap_or_else(|| format!("p{}", item.port));
+        let mut spec = crate::client::TunnelSpec::http(&name, item.port);
+        if let Some(auth) = item.auth {
+            spec = spec.with_auth(auth);
+        }
+        if let Some(domain) = item.domain {
+            spec = spec.with_domain(domain);
+        }
         // 按名字幂等：脚本重复执行不该报错，也不该开出一堆重复隧道
-        match engine.add_tunnel(&name, item.port).await {
+        match engine.add_tunnel_spec(spec).await {
             Ok(()) => {
                 let url = engine.status().tunnel(&name).and_then(|t| t.url.clone());
                 results.push(CreateResult {
@@ -522,6 +539,19 @@ mod tests {
     #[test]
     fn tunnel_name_defaults_to_the_port() {
         // 脚本里最常见的写法是只给端口
+        // 打错字段名必须报错，不能像以前那样悄悄丢掉——访问口令就是这么失效的
+        assert!(
+            serde_json::from_str::<NewTunnels>(r#"{"port":5678,"auht":"a:b"}"#).is_err(),
+            "打错的字段要被拒绝"
+        );
+
+        let with_auth: NewTunnels =
+            serde_json::from_str(r#"{"port":5678,"auth":"demo:s3cret"}"#).unwrap();
+        match with_auth {
+            NewTunnels::One(t) => assert_eq!(t.auth.as_deref(), Some("demo:s3cret")),
+            _ => panic!("应解析成单个"),
+        }
+
         let one: NewTunnels = serde_json::from_str(r#"{"port":5678}"#).unwrap();
         match one {
             NewTunnels::One(t) => {

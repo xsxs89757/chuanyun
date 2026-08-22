@@ -188,7 +188,7 @@ export component AppWindow inherits Window {
     // ---- 由界面触发 ----
     callback login(string, string, string);
     callback logout();
-    callback add-tunnel(string, int);
+    callback add-tunnel(string, int, string);
     callback toggle-tunnel(string, bool);
     callback remove-tunnel(string);
     callback copy-url(string);
@@ -379,6 +379,20 @@ export component AppWindow inherits Window {
                         placeholder-text: @tr("本地端口，例如 8082");
                         input-type: number;
                     }
+                    Text {
+                        text: @tr("访问口令（可留空）");
+                        font-size: 12px;
+                        color: Theme.muted;
+                    }
+                    auth-input := LineEdit {
+                        placeholder-text: @tr("用户名:口令，例如 demo:s3cret");
+                    }
+                    Text {
+                        text: @tr("填了之后访问这个地址会先要口令。演示给客户看、或者隧道要开一整天时值得加一道门。");
+                        font-size: 11px;
+                        color: Theme.muted;
+                        wrap: word-wrap;
+                    }
                     HorizontalLayout {
                         spacing: 8px;
                         alignment: end;
@@ -390,9 +404,10 @@ export component AppWindow inherits Window {
                             text: @tr("创建");
                             primary: true;
                             clicked => {
-                                root.add-tunnel(name-input.text, port-input.text.to-float());
+                                root.add-tunnel(name-input.text, port-input.text.to-float(), auth-input.text);
                                 name-input.text = "";
                                 port-input.text = "";
+                                auth-input.text = "";
                                 root.adding = false;
                             }
                         }

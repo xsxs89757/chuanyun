@@ -32,6 +32,26 @@ pub struct TunnelEntry {
     pub enabled: bool,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// 访问口令（`用户名:口令`）。
+    ///
+    /// 必须存下来：断线重连和重开应用都要拿它重新开隧道，不存的话隧道回来了
+    /// 但门没了——那比一开始就没设口令更糟，因为用户以为它还锁着。
+    /// 状态文件是 0600，并且已经存着登录凭证，多存这一项不改变风险面。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<String>,
+    /// 自定义域名（需管理员先登记给本人）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_domain: Option<String>,
+}
+
+fn spec_of(name: &str, e: &TunnelEntry) -> TunnelSpec {
+    TunnelSpec {
+        name: name.to_string(),
+        local_port: e.local_port,
+        kind: cy_proto::TunnelKind::Http,
+        auth: e.auth.clone(),
+        custom_domain: e.custom_domain.clone(),
+    }
 }
 
 impl Default for TunnelEntry {
@@ -39,6 +59,8 @@ impl Default for TunnelEntry {
         Self {
             local_port: 0,
             enabled: true,
+            auth: None,
+            custom_domain: None,
             note: String::new(),
         }
     }
@@ -102,14 +124,26 @@ impl State {
         self.tunnels
             .iter()
             .filter(|(_, e)| e.enabled)
-            .map(|(name, e)| TunnelSpec::http(name, e.local_port))
+            .map(|(name, e)| spec_of(name, e))
             .collect()
     }
 
-    pub fn upsert_tunnel(&mut self, name: &str, local_port: u16, enabled: bool) {
-        let entry = self.tunnels.entry(name.to_string()).or_default();
-        entry.local_port = local_port;
+    /// 按名字取回完整的隧道定义。
+    ///
+    /// 重开隧道（重连、重新打开开关）一律走这里，别在调用处现拼
+    /// `TunnelSpec::http(name, port)`——那样每加一个字段都会漏掉一处，
+    /// 访问口令和自定义域名就是这么丢的。
+    pub fn spec(&self, name: &str) -> Option<TunnelSpec> {
+        self.tunnels.get(name).map(|e| spec_of(name, e))
+    }
+
+    /// 记下一条隧道。整个 spec 进来，免得新增字段时漏存。
+    pub fn upsert_tunnel(&mut self, spec: &TunnelSpec, enabled: bool) {
+        let entry = self.tunnels.entry(spec.name.clone()).or_default();
+        entry.local_port = spec.local_port;
         entry.enabled = enabled;
+        entry.auth = spec.auth.clone();
+        entry.custom_domain = spec.custom_domain.clone();
     }
 
     pub fn set_enabled(&mut self, name: &str, enabled: bool) {
@@ -157,8 +191,8 @@ mod tests {
             token: "cy_zhangsan_abc".into(),
             ..Default::default()
         };
-        state.upsert_tunnel("wx", 8082, true);
-        state.upsert_tunnel("admin", 5173, false);
+        state.upsert_tunnel(&TunnelSpec::http("wx", 8082), true);
+        state.upsert_tunnel(&TunnelSpec::http("admin", 5173), false);
         state.save(&path).unwrap();
 
         let loaded = State::load(&path);
@@ -195,6 +229,50 @@ mod tests {
             path.with_extension("json.bak").exists(),
             "原件应当备份下来，万一是我们解析写错了还能捞回"
         );
+    }
+
+    /// 访问口令必须跟着状态一起存下来。它曾经根本没进 TunnelEntry，
+    /// 于是断线重连、重新打开开关、重开应用之后隧道回来了但门没了——
+    /// 比一开始就没设口令更糟，因为用户以为它还锁着。
+    #[test]
+    fn access_password_and_custom_domain_survive_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+
+        let mut state = State::default();
+        state.upsert_tunnel(
+            &TunnelSpec::http("wx", 8082)
+                .with_auth("demo:s3cret")
+                .with_domain("pay.example.com"),
+            true,
+        );
+        state.save(&path).unwrap();
+
+        let loaded = State::load(&path);
+        let spec = loaded.spec("wx").expect("隧道应该还在");
+        assert_eq!(spec.auth.as_deref(), Some("demo:s3cret"), "口令要存下来");
+        assert_eq!(
+            spec.custom_domain.as_deref(),
+            Some("pay.example.com"),
+            "自定义域名要存下来"
+        );
+
+        // 重连时全量重开走的是这条路，它也得带着口令
+        let reopened = loaded.enabled_tunnels();
+        assert_eq!(reopened.len(), 1);
+        assert_eq!(reopened[0].auth.as_deref(), Some("demo:s3cret"));
+    }
+
+    /// 没设口令的隧道不该在状态文件里留下 auth 这个键。
+    #[test]
+    fn a_tunnel_without_a_password_writes_no_auth_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let mut state = State::default();
+        state.upsert_tunnel(&TunnelSpec::http("wx", 8082), true);
+        state.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("auth"), "不该写空字段: {text}");
     }
 
     #[test]

@@ -29,5 +29,11 @@ qrcode.workspace = true
 directories.workspace = true
 arboard = "3.6.1"
 
+# 点 Dock 图标把窗口叫回来。winit 不处理 reopen 回调，得自己往 delegate 上挂。
+# 版本跟 Slint 的 winit 后端一致，不会多引一份。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
+
 [build-dependencies]
 slint-build.workspace = true

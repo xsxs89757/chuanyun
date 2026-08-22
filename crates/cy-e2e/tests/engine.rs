@@ -371,3 +371,169 @@ async fn local_api_accepts_a_batch_of_ports() {
     let status = engine.status();
     assert_eq!(status.tunnels.len(), 3);
 }
+
+// ================= 访问口令走完整路径 =================
+
+/// 一个真正的 HTTP 服务。回声服务是 TCP 级的字节回声，HTTP 请求回声回去
+/// hyper 解析不了，口令放行之后会拿到 502 而不是 200。
+async fn local_http() -> u16 {
+    use axum::{routing::get, Router};
+    let app = Router::new().route("/", get(|| async { "secret content" }));
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let p = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(l, app).await;
+    });
+    p
+}
+
+/// 经引擎开的带口令隧道，口令要真的生效。
+///
+/// 这条测试是补上来的：`tcp_and_auth.rs` 那几条直接调 `conn.open_tunnel(spec)`，
+/// 绕过了引擎，所以证明的是「服务端会校验」，不是「产品能用」。实际上引擎那层
+/// 只传了名字和端口，口令一路被丢掉——设了等于没设，而用户以为门锁着。
+#[tokio::test]
+async fn a_password_set_through_the_engine_is_actually_enforced() {
+    use cy_core::TunnelSpec;
+
+    let server = TestServer::start().await;
+    let token = server.add_user("zhangsan").await;
+    let echo = local_http().await;
+
+    let engine = Engine::start(None, brand(&server));
+    engine
+        .login(
+            server.handle.control_addr.to_string(),
+            &token,
+            &server.handle.fingerprint,
+        )
+        .await
+        .expect("登录");
+
+    engine
+        .add_tunnel_spec(TunnelSpec::http("wx", echo).with_auth("demo:s3cret"))
+        .await
+        .expect("开隧道");
+
+    let client = reqwest::Client::builder()
+        .resolve("zhangsan-wx.t.example.com", server.handle.http_addr)
+        .build()
+        .unwrap();
+
+    let anon = client
+        .get("http://zhangsan-wx.t.example.com/")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401, "不带口令必须被挡");
+
+    let wrong = client
+        .get("http://zhangsan-wx.t.example.com/")
+        .basic_auth("demo", Some("nope"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), 401, "口令错也要挡");
+
+    let ok = client
+        .get("http://zhangsan-wx.t.example.com/")
+        .basic_auth("demo", Some("s3cret"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200, "口令对要放行");
+}
+
+/// 重连之后口令还在。
+///
+/// 引擎重连时会把期望态里的隧道全量重开一遍。如果那条路径不带口令，
+/// 隧道会照常回来但门没了——这比一开始就没设更危险，因为没有任何提示。
+#[tokio::test]
+async fn the_password_survives_a_server_restart() {
+    use cy_core::TunnelSpec;
+
+    let data_dir = tempfile::tempdir().unwrap();
+    let echo = local_http().await;
+    let control_port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+
+    let make_server = || {
+        let dir = data_dir.path().to_path_buf();
+        async move {
+            let mut config = cy_server::Config {
+                storage: cy_server::config::StorageConfig { data_dir: dir },
+                ..Default::default()
+            };
+            config.http.domain_suffix = "t.example.com".into();
+            config.control.listen = format!("127.0.0.1:{control_port}").parse().unwrap();
+            config.http.listen = "127.0.0.1:0".parse().unwrap();
+            config.admin.listen = "127.0.0.1:0".parse().unwrap();
+            config.control.heartbeat_secs = 1;
+            cy_server::Server::start(config).await.expect("启动服务端")
+        }
+    };
+
+    let first = make_server().await;
+    let token = first.store.add_user("zhangsan", None, 10).await.unwrap();
+    let fingerprint = first.fingerprint.clone();
+
+    let engine = Engine::start(
+        None,
+        Brand {
+            default_server: format!("127.0.0.1:{control_port}"),
+            tls_pin: fingerprint.clone(),
+            update_url: String::new(),
+        },
+    );
+    engine
+        .login(format!("127.0.0.1:{control_port}"), &token, &fingerprint)
+        .await
+        .expect("登录");
+    engine
+        .add_tunnel_spec(TunnelSpec::http("wx", echo).with_auth("demo:s3cret"))
+        .await
+        .expect("开隧道");
+
+    first.shutdown().await;
+    wait_for("引擎察觉掉线", Duration::from_secs(10), || {
+        !engine.status().connected
+    })
+    .await;
+
+    let second = make_server().await;
+    wait_for(
+        "自动重连并恢复隧道",
+        Duration::from_secs(30),
+        || {
+            engine.status().connected
+                && engine
+                    .status()
+                    .tunnel("wx")
+                    .and_then(|t| t.url.clone())
+                    .is_some()
+        },
+    )
+    .await;
+
+    // 重开之后的隧道必须还带着口令
+    let client = reqwest::Client::builder()
+        .resolve("zhangsan-wx.t.example.com", second.http_addr)
+        .build()
+        .unwrap();
+    let anon = client
+        .get("http://zhangsan-wx.t.example.com/")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401, "重连之后门还得在");
+
+    let ok = client
+        .get("http://zhangsan-wx.t.example.com/")
+        .basic_auth("demo", Some("s3cret"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200, "带对口令仍然能进");
+}

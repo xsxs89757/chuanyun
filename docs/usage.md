@@ -48,27 +48,10 @@ tomorrow you don't have to set it up again.
 
 ## Wiring it into a project
 
-### One-off: click it in the UI
+### In the UI
 
-Fine for personal or temporary tunnels.
-
-### Team projects: commit a config file
-
-Put a `chuanyun.toml` in the project root and commit it:
-
-```toml
-project = "crm"
-
-[[tunnels]]
-name = "api"
-port = 8082
-
-[[tunnels]]
-name = "admin"
-port = 5173
-```
-
-Adding a port later is a few more lines; teammates pull and re-import.
+Click "new tunnel", give it a name and a port. Tunnels are remembered and restored when the
+app reopens — this covers most cases.
 
 ### Scripted
 
@@ -76,11 +59,19 @@ Chuanyun exposes an HTTP API on `127.0.0.1:7075`. One line in your start script 
 the ports:
 
 ```bash
-curl -s -X POST localhost:7075/api/tunnels \
+curl -s -X POST localhost:7075/api/tunnels -H 'Content-Type: application/json' \
      -d '[{"port":8082,"name":"api"},{"port":5666,"name":"web"}]'
 ```
 
-Idempotent by name — running the script repeatedly won't pile up duplicate tunnels.
+Idempotent by name — running the script repeatedly won't pile up duplicate tunnels. To put
+a password on one, add a field:
+
+```bash
+curl -s -X POST localhost:7075/api/tunnels -H 'Content-Type: application/json' \
+     -d '{"port":8082,"name":"api","auth":"demo:s3cret"}'
+```
+
+A misspelled field is an error, not silently ignored.
 
 ### Let the callback URL follow the environment
 
@@ -111,7 +102,7 @@ BASE=$(curl -sf 'localhost:7075/api/resolve?port=8082&plain=1' || echo "http://1
 |---|---|
 | `GET /api/status` | Connected or not, and the domain suffix |
 | `GET /api/tunnels` | All current tunnels |
-| `POST /api/tunnels` | Register a tunnel; takes an object or an array |
+| `POST /api/tunnels` | Register a tunnel; an object or an array. Optional `auth` (password), `domain` (custom domain) |
 | `DELETE /api/tunnels/{name}` | Unregister |
 | `GET /api/resolve?port=N` | The address this port is reachable at; add `&plain=1` for plain text |
 | `GET /api/requests` | Recorded requests; `?tunnel=name` to filter |
@@ -130,8 +121,15 @@ these endpoints work from the shell and from scripts, but not from `fetch()` in 
 
 Demoing to a client, or leaving a tunnel up all day? Add a door.
 
-Set `username:password` in the tunnel's settings and browsers will prompt for it. Requests
-that fail the check never reach your local service.
+When **creating** the tunnel, fill in the "access password" field as `username:password`
+(e.g. `demo:s3cret`). Browsers will prompt for it; requests that fail the check never reach
+your local service.
+
+A protected tunnel's card is marked **"password set"** — glance at it before sending the
+address to someone, so they aren't met with a prompt you forgot about. The password is saved
+with the tunnel and survives reconnects and app restarts.
+
+To change or remove it, delete the tunnel and create it again.
 
 ## Databases and SSH (TCP tunnels)
 

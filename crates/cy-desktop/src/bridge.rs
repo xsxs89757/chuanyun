@@ -75,10 +75,11 @@ fn wire_callbacks(window: &AppWindow, engine: &Engine, runtime: &Arc<tokio::runt
         let engine = engine.clone();
         let runtime = runtime.clone();
         let weak = window.as_weak();
-        window.on_add_tunnel(move |name, port| {
+        window.on_add_tunnel(move |name, port, auth| {
             let engine = engine.clone();
             let weak = weak.clone();
             let name = name.to_string();
+            let auth = auth.trim().to_string();
             // 端口从输入框来，可能是空的或超范围——在这里挡住，别把垃圾送进引擎
             let Ok(port) = u16::try_from(port.max(0)) else {
                 if let Some(w) = weak.upgrade() {
@@ -86,8 +87,20 @@ fn wire_callbacks(window: &AppWindow, engine: &Engine, runtime: &Arc<tokio::runt
                 }
                 return;
             };
+            // 口令是 `用户名:口令`。少了冒号服务端会永远校验不过，
+            // 而且失败方式是「访问被拒」而不是「你填错了」——在这里挡住。
+            if !auth.is_empty() && !auth.contains(':') {
+                if let Some(w) = weak.upgrade() {
+                    w.set_login_error("访问口令要写成 用户名:口令，中间有个冒号".into());
+                }
+                return;
+            }
+            let mut spec = cy_core::TunnelSpec::http(&name, port);
+            if !auth.is_empty() {
+                spec = spec.with_auth(auth);
+            }
             runtime.spawn(async move {
-                if let Err(e) = engine.add_tunnel(&name, port).await {
+                if let Err(e) = engine.add_tunnel_spec(spec).await {
                     tracing::warn!(%name, error = %e, "新建隧道失败");
                     // 失败原因会随状态刷新出现在那条隧道的卡片上
                 }
@@ -374,7 +387,7 @@ fn apply_status(window: &AppWindow, status: &Status) {
             name: t.name.clone().into(),
             local_port: t.local_port as i32,
             kind: "http".into(),
-            protected: false,
+            protected: t.protected,
             url: t.url.clone().unwrap_or_default().into(),
             enabled: t.enabled,
             error: t.error.clone().unwrap_or_default().into(),

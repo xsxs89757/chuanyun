@@ -16,6 +16,8 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod bridge;
+#[cfg(target_os = "macos")]
+mod dock;
 mod tray;
 
 use std::sync::Arc;
@@ -78,7 +80,33 @@ fn main() -> anyhow::Result<()> {
 
     bridge::wire(&window, &tray, engine.clone(), runtime.clone());
 
-    window.run()?;
+    // 关窗之后点 Dock 图标要能把窗口叫回来。winit 把 NSApplication 的 delegate
+    // 装在事件循环启动那一刻，所以要先 show 一次把 AppKit 初始化完，再去挂。
+    window.show()?;
+    #[cfg(target_os = "macos")]
+    dock::install(&window);
+
+    // 调试用：收到 SIGUSR1 就把窗口藏起来，等价于点关闭按钮。
+    // 没有辅助功能权限时没法用脚本点按钮，验证「关窗后点 Dock 能叫回来」要靠它。
+    #[cfg(all(debug_assertions, unix))]
+    {
+        let weak = window.as_weak();
+        runtime.spawn(async move {
+            let mut sig =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+                    .expect("注册 SIGUSR1");
+            while sig.recv().await.is_some() {
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        let _ = w.hide();
+                    }
+                });
+            }
+        });
+    }
+
+    slint::run_event_loop()?;
 
     // 关窗不等于退出（有托盘），真正退出时才收尾
     runtime.block_on(async { engine.shutdown().await });
