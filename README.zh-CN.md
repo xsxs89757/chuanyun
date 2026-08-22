@@ -53,10 +53,11 @@ curl -fsSL https://github.com/xsxs89757/chuanyun/releases/latest/download/instal
 
 ### 给同事发凭证
 
-装完之后在服务器上：
+装完之后在服务器上。**用户名用拼音**（小写字母、数字、连字符）——它会成为隧道域名的一部分，
+`zhangsan-wx.t.example.com`，DNS 里放不下汉字：
 
 ```bash
-chuanyun-server user add 张三        # 输出凭证，只显示这一次
+chuanyun-server user add zhangsan    # 输出凭证，只显示这一次
 chuanyun-server fingerprint          # 证书指纹，和凭证一起发给本人
 ```
 
@@ -64,8 +65,8 @@ chuanyun-server fingerprint          # 证书指纹，和凭证一起发给本�
 
 ```bash
 chuanyun-server user list            # 谁有凭证
-chuanyun-server user reissue 张三    # 凭证丢了：换一张，旧的立刻失效
-chuanyun-server user revoke 张三     # 离职：吊销，在线连接立刻断
+chuanyun-server user reissue zhangsan   # 凭证丢了：换一张，旧的立刻失效
+chuanyun-server user revoke zhangsan    # 离职：吊销，在线连接立刻断
 chuanyun-server status               # 谁在线、几条隧道
 ```
 

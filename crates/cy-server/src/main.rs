@@ -241,7 +241,7 @@ async fn user_command(config_path: &std::path::Path, cmd: UserCommand) -> anyhow
         UserCommand::List => {
             let users = store.list_users().await?;
             if users.is_empty() {
-                println!("还没有用户。用 `chuanyun-server user add <名字>` 创建。");
+                println!("还没有用户。用 `chuanyun-server user add <拼音>` 创建（用户名会成为域名的一部分）。");
                 return Ok(());
             }
             println!("{:<16} {:<12} 到期", "用户", "状态");

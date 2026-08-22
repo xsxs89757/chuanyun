@@ -454,7 +454,7 @@ ${B}3. nginx 反代${N}
 
 ${B}4. 给同事发凭证${N}
 
-     chuanyun-server user add 张三
+     chuanyun-server user add zhangsan      # 用户名用拼音：它会成为隧道域名的一部分
 
    凭证只显示一次。把它和下面这串证书指纹一起发给本人：
 
@@ -465,7 +465,7 @@ ${B}常用命令${N}
   journalctl -u $SVC -f      看日志
   chuanyun-server status              谁在线、开了几条隧道
   chuanyun-server user list           谁有凭证、过没过期
-  chuanyun-server user add <名字>     再发一个人
+  chuanyun-server user add <拼音>     再发一个人
   chuanyun-server fingerprint         再看一次证书指纹
 
 完整说明：https://github.com/$REPO/blob/main/docs/部署.md
