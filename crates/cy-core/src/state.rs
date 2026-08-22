@@ -165,6 +165,17 @@ impl State {
         }
     }
 
+    /// 改一条隧道的访问口令；`None` 表示去掉口令。隧道不存在返回 false。
+    pub fn set_auth(&mut self, name: &str, auth: Option<String>) -> bool {
+        match self.tunnels.get_mut(name) {
+            Some(e) => {
+                e.auth = auth;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn remove_tunnel(&mut self, name: &str) {
         self.tunnels.remove(name);
     }

@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 rust-version = "1.92"
 license = "Apache-2.0"
@@ -19,9 +19,9 @@ authors = ["穿云 contributors"]
 [workspace.dependencies]
 # 内部 crate 也带上版本号：没有它们就是「通配依赖」，将来想发布到 crates.io
 # 会被拒（那边不接受纯路径依赖），依赖审计也会拦。
-cy-proto = { path = "crates/cy-proto", version = "0.1.7" }
-cy-core = { path = "crates/cy-core", version = "0.1.7" }
-cy-server = { path = "crates/cy-server", version = "0.1.7" }
+cy-proto = { path = "crates/cy-proto", version = "0.1.8" }
+cy-core = { path = "crates/cy-core", version = "0.1.8" }
+cy-server = { path = "crates/cy-server", version = "0.1.8" }
 
 # 异步运行时与 IO
 tokio = { version = "1.53", features = ["rt-multi-thread", "net", "io-util", "macros", "sync", "time", "signal", "fs"] }

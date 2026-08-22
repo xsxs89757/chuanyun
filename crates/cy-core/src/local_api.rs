@@ -36,7 +36,10 @@ pub async fn serve(engine: Engine, port: u16) -> std::io::Result<()> {
     let app = Router::new()
         .route("/api/status", get(status))
         .route("/api/tunnels", get(list_tunnels).post(create_tunnels))
-        .route("/api/tunnels/{name}", delete(remove_tunnel))
+        .route(
+            "/api/tunnels/{name}",
+            delete(remove_tunnel).patch(update_tunnel),
+        )
         .route("/api/resolve", get(resolve))
         .route("/api/connects", get(list_connects).post(create_connect))
         .route("/api/connects/{port}", delete(remove_connect))
@@ -219,6 +222,47 @@ async fn create_tunnels(
         }
     }
     Json(results)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TunnelPatch {
+    /// 新口令；传空字符串表示去掉口令
+    auth: Option<String>,
+}
+
+/// 改一条隧道的口令，地址不变。
+async fn update_tunnel(
+    State(engine): State<Arc<Engine>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<TunnelPatch>,
+) -> Response {
+    let Some(auth) = body.auth else {
+        return (StatusCode::BAD_REQUEST, "要改什么？目前只支持 auth\n").into_response();
+    };
+    let auth = if auth.trim().is_empty() {
+        None
+    } else {
+        if !auth.contains(':') {
+            return (StatusCode::BAD_REQUEST, "口令要写成 用户名:口令\n").into_response();
+        }
+        Some(auth)
+    };
+    match engine.set_auth(&name, auth).await {
+        Ok(()) => {
+            let protected = engine
+                .status()
+                .tunnel(&name)
+                .map(|t| t.protected)
+                .unwrap_or(false);
+            Json(serde_json::json!({ "ok": true, "protected": protected })).into_response()
+        }
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+    }
 }
 
 async fn remove_tunnel(

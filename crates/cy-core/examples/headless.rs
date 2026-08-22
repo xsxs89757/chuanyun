@@ -61,9 +61,7 @@ async fn main() -> anyhow::Result<()> {
     if args.local_api {
         let engine = engine.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                cy_core::local_api::serve(engine, cy_core::local_api::DEFAULT_PORT).await
-            {
+            if let Err(e) = cy_core::local_api::serve(engine, args.local_api_port).await {
                 eprintln!("本地 API 起不来：{e}");
             }
         });
@@ -83,6 +81,7 @@ struct Args {
     pin: String,
     tunnels: Vec<(String, u16)>,
     local_api: bool,
+    local_api_port: u16,
 }
 
 impl Args {
@@ -93,6 +92,7 @@ impl Args {
         let mut pin = String::new();
         let mut tunnels = Vec::new();
         let mut local_api = false;
+        let mut local_api_port = cy_core::local_api::DEFAULT_PORT;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -101,6 +101,11 @@ impl Args {
                 "--token" => token = args.next().unwrap_or_default(),
                 "--pin" => pin = args.next().unwrap_or_default(),
                 "--local-api" => local_api = true,
+                // 桌面端占着默认端口时，测试用的 headless 得能换一个
+                "--local-api-port" => {
+                    local_api = true;
+                    local_api_port = args.next().unwrap_or_default().parse()?;
+                }
                 "--tunnel" => {
                     let spec = args.next().unwrap_or_default();
                     let (name, port) = spec
@@ -126,6 +131,7 @@ impl Args {
             pin,
             tunnels,
             local_api,
+            local_api_port,
         })
     }
 }
@@ -141,6 +147,7 @@ fn print_help() {
   --pin <指纹>        服务端证书指纹；不填则首次连接时信任对方（仅限可信网络）
   --tunnel 名字=端口   开一条隧道，可重复
   --local-api         同时启动本地 API（127.0.0.1:{port}）
+  --local-api-port N  本地 API 换个端口（桌面端占着默认端口时用）
   -h, --help          显示这段说明
 
 例子：

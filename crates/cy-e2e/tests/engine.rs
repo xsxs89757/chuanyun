@@ -684,3 +684,72 @@ async fn a_script_re_registering_the_tunnel_does_not_strip_the_password() {
         "界面上也还该显示「已设口令」"
     );
 }
+
+/// 改口令不用删了重建：地址不变，新口令立刻生效。
+#[tokio::test]
+async fn changing_the_password_keeps_the_address_and_takes_effect_at_once() {
+    use cy_core::TunnelSpec;
+
+    let server = TestServer::start().await;
+    let token = server.add_user("zhangsan").await;
+    let http = local_http().await;
+
+    let engine = Engine::start(None, brand(&server));
+    engine
+        .login(
+            server.handle.control_addr.to_string(),
+            &token,
+            &server.handle.fingerprint,
+        )
+        .await
+        .expect("登录");
+    engine
+        .add_tunnel_spec(TunnelSpec::http("api", http).with_auth("demo:old"))
+        .await
+        .expect("开隧道");
+    let url_before = engine.status().tunnel("api").unwrap().url.clone();
+
+    engine
+        .set_auth("api", Some("demo:new".into()))
+        .await
+        .expect("改口令");
+
+    assert_eq!(
+        engine.status().tunnel("api").unwrap().url,
+        url_before,
+        "地址不能变"
+    );
+    assert!(engine.status().tunnel("api").unwrap().protected);
+
+    let client = reqwest::Client::builder()
+        .resolve("zhangsan-api.t.example.com", server.handle.http_addr)
+        .build()
+        .unwrap();
+    let old = client
+        .get("http://zhangsan-api.t.example.com/")
+        .basic_auth("demo", Some("old"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(old.status(), 401, "旧口令要立刻失效");
+    let new = client
+        .get("http://zhangsan-api.t.example.com/")
+        .basic_auth("demo", Some("new"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(new.status(), 200, "新口令要能进");
+
+    // 去掉口令
+    engine.set_auth("api", None).await.expect("去掉口令");
+    assert!(!engine.status().tunnel("api").unwrap().protected);
+    let anon = client
+        .get("http://zhangsan-api.t.example.com/")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 200, "去掉口令之后不带口令也能进");
+
+    // 改不存在的隧道要报错，不是静默成功
+    assert!(engine.set_auth("nope", Some("a:b".into())).await.is_err());
+}

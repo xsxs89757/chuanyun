@@ -105,6 +105,7 @@ BASE=$(curl -sf 'localhost:7075/api/resolve?port=8082&plain=1' || echo "http://1
 | `GET /api/tunnels` | All current tunnels |
 | `POST /api/tunnels` | Register a tunnel; an object or an array. Optional `auth` (password), `domain` (custom domain) |
 | `DELETE /api/tunnels/{name}` | Unregister |
+| `PATCH /api/tunnels/{name}` | Change the password: `{"auth":"user:password"}`; `""` removes it. Address unchanged |
 | `GET /api/resolve?port=N` | The address this port is reachable at; add `&plain=1` for plain text |
 | `GET /api/requests` | Recorded requests; `?tunnel=name` to filter |
 | `GET /api/requests/{id}` | One request in full |
@@ -130,7 +131,9 @@ A protected tunnel's card is marked **"password set"** — glance at it before s
 address to someone, so they aren't met with a prompt you forgot about. The password is saved
 with the tunnel and survives reconnects and app restarts.
 
-To change or remove it, delete the tunnel and create it again.
+To change or remove it, click **"change password"** on the tunnel's card ("set password"
+if it has none), enter the new one and save; saving it empty removes the password. The address
+stays the same; the new password takes effect immediately and the old one stops working.
 
 ## Databases and SSH (TCP tunnels)
 

@@ -60,6 +60,10 @@ component TunnelRow inherits Card {
     callback copy();
     callback remove();
     callback show-qr();
+    // 改口令；传空字符串表示去掉
+    callback set-auth(string);
+
+    property <bool> editing-auth: false;
 
     height: self.preferred-height;
 
@@ -145,8 +149,43 @@ component TunnelRow inherits Card {
             }
         }
 
+        if root.editing-auth: VerticalLayout {
+            spacing: 6px;
+            Text {
+                text: root.tunnel.protected
+                    ? @tr("新口令（用户名:口令）；留空并保存 = 去掉口令")
+                    : @tr("口令（用户名:口令），例如 demo:s3cret");
+                font-size: 11px;
+                color: Theme.muted;
+                wrap: word-wrap;
+            }
+            auth-edit := LineEdit { placeholder-text: "demo:s3cret"; }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                Button {
+                    text: @tr("取消");
+                    clicked => { root.editing-auth = false; auth-edit.text = ""; }
+                }
+                Button {
+                    text: @tr("保存");
+                    primary: true;
+                    clicked => {
+                        root.set-auth(auth-edit.text);
+                        auth-edit.text = "";
+                        root.editing-auth = false;
+                    }
+                }
+            }
+        }
+
         HorizontalLayout {
             alignment: end;
+            spacing: 8px;
+            Button {
+                text: root.tunnel.protected ? @tr("改口令") : @tr("设口令");
+                clicked => { root.editing-auth = !root.editing-auth; }
+            }
             Button { text: @tr("删除"); clicked => { root.remove(); } }
         }
     }
@@ -196,6 +235,7 @@ export component AppWindow inherits Window {
     callback add-tunnel(string, int, string);
     callback toggle-tunnel(string, bool);
     callback remove-tunnel(string);
+    callback set-tunnel-auth(string, string);
     callback copy-url(string);
     callback show-qr(string);
     callback close-qr();
@@ -385,6 +425,7 @@ export component AppWindow inherits Window {
                         copy => { root.copy-url(t.url); }
                         show-qr => { root.show-qr(t.url); }
                         remove => { root.remove-tunnel(t.name); }
+                        set-auth(a) => { root.set-tunnel-auth(t.name, a); }
                     }
                 }
             }

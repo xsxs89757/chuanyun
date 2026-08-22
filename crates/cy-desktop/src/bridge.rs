@@ -121,6 +121,29 @@ fn wire_callbacks(window: &AppWindow, engine: &Engine, runtime: &Arc<tokio::runt
     {
         let engine = engine.clone();
         let runtime = runtime.clone();
+        let weak = window.as_weak();
+        window.on_set_tunnel_auth(move |name, auth| {
+            let engine = engine.clone();
+            let name = name.to_string();
+            let auth = auth.trim().to_string();
+            if !auth.is_empty() && !auth.contains(':') {
+                if let Some(w) = weak.upgrade() {
+                    w.set_login_error("访问口令要写成 用户名:口令，中间有个冒号".into());
+                }
+                return;
+            }
+            let auth = (!auth.is_empty()).then_some(auth);
+            runtime.spawn(async move {
+                if let Err(e) = engine.set_auth(&name, auth).await {
+                    tracing::warn!(%name, error = %e, "改口令失败");
+                }
+            });
+        });
+    }
+
+    {
+        let engine = engine.clone();
+        let runtime = runtime.clone();
         window.on_remove_tunnel(move |name| {
             let engine = engine.clone();
             let name = name.to_string();

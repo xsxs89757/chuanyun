@@ -1355,7 +1355,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "cy-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "cy-desktop"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1410,7 +1410,7 @@ dependencies = [
 
 [[package]]
 name = "cy-e2e"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "cy-proto"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "futures",
  "serde",
@@ -1445,7 +1445,7 @@ dependencies = [
 
 [[package]]
 name = "cy-server"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "axum",

@@ -112,6 +112,12 @@ enum Cmd {
         name: String,
         enabled: bool,
     },
+    /// 改口令；`None` = 去掉口令
+    SetAuth {
+        name: String,
+        auth: Option<String>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     AddConnect {
         spec: ConnectSpec,
         reply: oneshot::Sender<Result<String, String>>,
@@ -226,6 +232,27 @@ impl Engine {
                 enabled,
             })
             .await;
+    }
+
+    /// 改一条隧道的访问口令（`None` 去掉口令）。地址不变。
+    ///
+    /// 这是和「删了重建」不同的路：隧道地址是固定的、要填进微信后台的东西，
+    /// 为了换个口令把它删掉再建，意味着公网地址瞬断、而且用户得重新确认地址没变。
+    pub async fn set_auth(
+        &self,
+        name: impl Into<String>,
+        auth: Option<String>,
+    ) -> Result<(), String> {
+        let (reply, rx) = oneshot::channel();
+        self.cmds
+            .send(Cmd::SetAuth {
+                name: name.into(),
+                auth,
+                reply,
+            })
+            .await
+            .map_err(|_| "引擎已停止".to_string())?;
+        rx.await.map_err(|_| "引擎已停止".to_string())?
     }
 
     /// 接入同事的服务：把上游映射成本地的一个端口。
@@ -562,6 +589,28 @@ async fn session(
                         remove_connect(local_port, connects, status).await;
                         let _ = reply.send(());
                     }
+                    Cmd::SetAuth { name, auth, reply } => {
+                        if !state.set_auth(&name, auth) {
+                            let _ = reply.send(Err(format!("没有叫 {name} 的隧道")));
+                            continue;
+                        }
+                        save(state, state_path);
+                        // 口令是服务端在入口处校验的，得把新的送过去：关掉重开这条隧道。
+                        // 地址由名字决定，重开之后还是同一个。
+                        let result = match state.spec(&name) {
+                            Some(spec) if spec_enabled(state, &name) => {
+                                conn.close_tunnel(&name).await;
+                                open_and_record(&conn, &spec, status).await
+                            }
+                            _ => Ok(()),
+                        };
+                        set_status(status, |s| {
+                            if let Some(t) = s.tunnels.iter_mut().find(|t| t.name == name) {
+                                t.protected = state.spec(&name).and_then(|sp| sp.auth).is_some();
+                            }
+                        });
+                        let _ = reply.send(result);
+                    }
                     Cmd::SetEnabled { name, enabled } => {
                         state.set_enabled(&name, enabled);
                         save(state, state_path);
@@ -584,6 +633,10 @@ async fn session(
             }
         }
     }
+}
+
+fn spec_enabled(state: &State, name: &str) -> bool {
+    state.tunnels.get(name).map(|e| e.enabled).unwrap_or(false)
 }
 
 async fn open_and_record(
@@ -702,6 +755,21 @@ async fn handle_offline_cmd(
                     t.enabled = enabled;
                 }
             });
+        }
+        Cmd::SetAuth { name, auth, reply } => {
+            // 没连上也让改——记进期望态，连上后按新口令开
+            if !state.set_auth(&name, auth) {
+                let _ = reply.send(Err(format!("没有叫 {name} 的隧道")));
+                return CmdOutcome::Continue;
+            }
+            save(state, state_path);
+            let protected = state.spec(&name).and_then(|sp| sp.auth).is_some();
+            set_status(status, |s| {
+                if let Some(t) = s.tunnels.iter_mut().find(|t| t.name == name) {
+                    t.protected = protected;
+                }
+            });
+            let _ = reply.send(Ok(()));
         }
         Cmd::AddConnect { spec, reply } => {
             // 接入不需要先登录：上游是个普通的公网地址，本地代理直接就能起。
