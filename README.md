@@ -67,6 +67,27 @@ Not comfortable piping a script into a root shell? Read it first — it's one fi
 [`scripts/install-server.sh`](scripts/install-server.sh) — or follow the
 [manual steps](docs/deploy.md#manual-install).
 
+### Issue credentials
+
+On the server, once it's installed:
+
+```bash
+chuanyun-server user add zhangsan    # prints the credential — shown once
+chuanyun-server fingerprint          # certificate fingerprint; send it along
+```
+
+The person enters three things in the client: server address, credential, fingerprint
+(the fingerprint can be left blank — the first connection prompts to confirm it).
+
+```bash
+chuanyun-server user list            # who has credentials
+chuanyun-server user reissue zhangsan   # lost it: new one, old one stops working
+chuanyun-server user revoke zhangsan    # leaving: revoke, live connection drops
+chuanyun-server status               # who's online, how many tunnels
+```
+
+Upgrades, certificates, troubleshooting: [Operations](docs/operations.md).
+
 ### Desktop client (Windows, macOS)
 
 Download from the [latest release](../../releases/latest). The installers are **not

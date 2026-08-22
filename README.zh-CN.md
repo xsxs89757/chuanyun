@@ -51,6 +51,26 @@ curl -fsSL https://github.com/xsxs89757/chuanyun/releases/latest/download/instal
 不放心把脚本管道进 root shell 的话，先读一遍——就一个文件，
 [`scripts/install-server.sh`](scripts/install-server.sh)——或者照[手动步骤](docs/部署.md#手动安装)来。
 
+### 给同事发凭证
+
+装完之后在服务器上：
+
+```bash
+chuanyun-server user add 张三        # 输出凭证，只显示这一次
+chuanyun-server fingerprint          # 证书指纹，和凭证一起发给本人
+```
+
+同事在客户端填三样：服务器地址、凭证、指纹（指纹可留空，首次连接会弹窗确认）。
+
+```bash
+chuanyun-server user list            # 谁有凭证
+chuanyun-server user reissue 张三    # 凭证丢了：换一张，旧的立刻失效
+chuanyun-server user revoke 张三     # 离职：吊销，在线连接立刻断
+chuanyun-server status               # 谁在线、几条隧道
+```
+
+更多（升级、证书、排查）见[运维速查](docs/运维.md)。
+
 ### 桌面客户端（Windows、macOS）
 
 到 [最新发布](../../releases/latest) 下载。安装包**没有代码签名**，第一次打开要多一步，每台机器做一次：
