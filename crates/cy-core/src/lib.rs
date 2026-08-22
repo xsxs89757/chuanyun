@@ -27,5 +27,5 @@ pub mod verifier;
 pub use backoff::Backoff;
 pub use client::{connect, Connection, CoreConfig, Event, TunnelSpec, Verify, CLIENT_VERSION};
 pub use cy_proto::PROTO_VERSION;
-pub use engine::{Brand, Engine, Status, TunnelStatus};
+pub use engine::{Brand, Engine, Status, TunnelStatus, UpdateAvailable};
 pub use state::State;

@@ -217,6 +217,13 @@ pub struct AdminConfig {
     /// 不填就用 `<data_dir>/downloads`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_dir: Option<PathBuf>,
+    /// 下载页对外的地址，如 `https://t.example.com/download`。
+    ///
+    /// 客户端发现有新版时会让用户点开它。管理接口只监听回环，服务端自己
+    /// 不知道 nginx 把它反代到了哪个公网地址，得你告诉它。不填就只提示
+    /// 「有新版本」、不给链接。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
 }
 
 impl Default for AdminConfig {
@@ -224,12 +231,42 @@ impl Default for AdminConfig {
         Self {
             listen: default_admin_listen(),
             download_dir: None,
+            download_url: None,
         }
     }
 }
 
 fn default_admin_listen() -> SocketAddr {
     "127.0.0.1:7001".parse().expect("字面量地址")
+}
+
+/// 从安装包文件名里抠出版本号：`chuanyun-0.1.5-macos-universal.dmg` → `0.1.5`。
+///
+/// 只认 `chuanyun-<版本>-…` 且后缀是安装包的文件；别的文件（README、校验和）不算。
+fn version_in_filename(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    let is_pkg = lower.ends_with(".dmg") || lower.ends_with(".msi") || lower.ends_with(".exe");
+    if !is_pkg {
+        return None;
+    }
+    let rest = name.strip_prefix("chuanyun-")?;
+    let version = rest.split('-').next()?;
+    // 至少得长得像 x.y.z
+    let ok = version.split('.').count() == 3
+        && version
+            .split('.')
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+    ok.then(|| version.to_string())
+}
+
+/// 版本号排序用的 key。
+fn version_key(v: &str) -> (u32, u32, u32) {
+    let mut it = v.split('.').map(|p| p.parse().unwrap_or(0));
+    (
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+    )
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -243,6 +280,29 @@ pub enum ConfigError {
 }
 
 impl Config {
+    /// 安装包实际放在哪。
+    pub fn download_dir(&self) -> PathBuf {
+        self.admin
+            .download_dir
+            .clone()
+            .unwrap_or_else(|| self.storage.data_dir.join("downloads"))
+    }
+
+    /// 下载目录里最新的客户端版本。
+    ///
+    /// 从文件名里读：`chuanyun-0.1.5-macos-universal.dmg` → `0.1.5`。
+    /// 这是唯一的事实来源——管理员把包丢进目录，版本号就跟着变，不用另外
+    /// 维护一份清单，也不会出现「清单说 0.2.0 但目录里只有 0.1.5」的脱节。
+    /// 目录里没有安装包就返回 `None`，客户端据此不提示。
+    pub fn latest_client_version(&self) -> Option<String> {
+        let dir = self.download_dir();
+        let entries = std::fs::read_dir(&dir).ok()?;
+        entries
+            .flatten()
+            .filter_map(|e| version_in_filename(&e.file_name().to_string_lossy()))
+            .max_by_key(|v| version_key(v))
+    }
+
     pub fn load(path: &std::path::Path) -> Result<Self, ConfigError> {
         let text = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&text)?;
@@ -359,6 +419,47 @@ mod tests {
         .unwrap();
         assert!(c2.control.public_addr.is_none());
         assert_eq!(c2.control.listen.to_string(), "0.0.0.0:7000");
+    }
+
+    /// 最新客户端版本从下载目录的文件名里读，不另外维护清单。
+    #[test]
+    fn latest_client_version_comes_from_the_download_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c: Config = toml::from_str(
+            r#"[http]
+domain_suffix = "t.example.com""#,
+        )
+        .unwrap();
+        c.admin.download_dir = Some(dir.path().to_path_buf());
+
+        assert_eq!(c.latest_client_version(), None, "空目录就是没有");
+
+        for f in [
+            "chuanyun-0.1.4-macos-universal.dmg",
+            "chuanyun-0.1.10-windows-x86_64.msi", // 0.1.10 > 0.1.9，得按数字比不能按字符串
+            "chuanyun-0.1.9-macos-universal.dmg",
+            "SHA256SUMS",                                // 不是安装包
+            "chuanyun-server-0.9.9-linux-x86_64.tar.gz", // 服务端包，不算
+            "notes-1.2.3.dmg",                           // 不是 chuanyun- 开头
+        ] {
+            std::fs::write(dir.path().join(f), b"x").unwrap();
+        }
+        assert_eq!(c.latest_client_version().as_deref(), Some("0.1.10"));
+    }
+
+    #[test]
+    fn version_is_parsed_out_of_package_names() {
+        assert_eq!(
+            version_in_filename("chuanyun-0.1.5-macos-universal.dmg").as_deref(),
+            Some("0.1.5")
+        );
+        assert_eq!(
+            version_in_filename("chuanyun-0.1.5-windows-x86_64.msi").as_deref(),
+            Some("0.1.5")
+        );
+        assert_eq!(version_in_filename("chuanyun-0.1.5.txt"), None);
+        assert_eq!(version_in_filename("chuanyun-latest-macos.dmg"), None);
+        assert_eq!(version_in_filename("random.dmg"), None);
     }
 
     #[test]

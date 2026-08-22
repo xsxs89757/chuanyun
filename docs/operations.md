@@ -128,6 +128,7 @@ domain_suffix = "<suffix>"
 
 [admin]
 download_dir = "/var/lib/chuanyun/downloads"
+download_url = "https://<suffix>/download"   # where the client's update banner points
 
 [limits]
 max_tunnels_per_user = 10
@@ -146,7 +147,8 @@ sudo chown -R chuanyun:chuanyun /var/lib/chuanyun/downloads
 ```
 
 Only `.dmg`, `.msi`, and `.exe` are recognised; anything else there is neither listed nor
-downloadable. Remove the old ones when you ship a new version:
+downloadable. **The packages here also drive the client's update prompt** — the next client
+to connect sees "update available". Remove the old ones when you ship a new version:
 
 ```bash
 sudo rm -f /var/lib/chuanyun/downloads/*0.1.3*

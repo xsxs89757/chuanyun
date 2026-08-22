@@ -97,6 +97,17 @@ pub enum ServerMsg {
         /// 域名后缀，如 `t.example.com`。客户端拿它做展示与本地 API 的返回值，
         /// 但**不用它自己拼子域名**——地址一律以服务端返回的为准。
         domain_suffix: String,
+        /// 服务端上能下载到的最新客户端版本。
+        ///
+        /// 走控制通道而不是另开一个 HTTP 接口：客户端本来就连着这条线，不用再
+        /// 猜地址、不用管 nginx 反代了没有、不依赖 GitHub（国内办公室常常连不上，
+        /// 而且 API 按出口 IP 限流，全公司一个 IP 几下就用完）。
+        /// 服务端没放安装包时为空，客户端就不提示。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latest_client: Option<String>,
+        /// 有新版时让用户去哪下载。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        download_url: Option<String>,
     },
 
     /// 隧道开通成功。
@@ -174,8 +185,25 @@ mod tests {
             server: "0.1.0".into(),
             heartbeat_secs: 15,
             domain_suffix: "t.example.com".into(),
+            latest_client: Some("0.2.0".into()),
+            download_url: Some("https://t.example.com/download".into()),
         };
         assert_eq!(roundtrip_server(&welcome), welcome);
+
+        // 老服务端不发这两个字段，新客户端要能照常解析
+        let old_style = r#"{"type":"welcome","session":"s","server":"0.1.0","heartbeat_secs":15,"domain_suffix":"t.example.com"}"#;
+        let parsed: ServerMsg = serde_json::from_str(old_style).unwrap();
+        match parsed {
+            ServerMsg::Welcome {
+                latest_client,
+                download_url,
+                ..
+            } => {
+                assert!(latest_client.is_none());
+                assert!(download_url.is_none());
+            }
+            _ => panic!("应解析成 Welcome"),
+        }
 
         let opened = ServerMsg::TunnelOpened {
             id: "t1".into(),

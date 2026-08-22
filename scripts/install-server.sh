@@ -328,6 +328,9 @@ public_addr = "$IP:$CONTROL_PORT"
 [admin]
 # 管理接口，只监听回环——服务器上常有多个 ssh 用户，别把它暴露出去。
 listen = "127.0.0.1:$ADMIN_PORT"
+# 下载页对外的地址。把安装包放进 $DATA_DIR/downloads/，客户端连上时
+# 会看到「有新版本」提示，横幅上的链接就是它。要和 nginx 里反代的路径一致。
+download_url = "https://$DOMAIN/download"
 
 [storage]
 data_dir = "$DATA_DIR"

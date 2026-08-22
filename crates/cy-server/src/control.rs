@@ -276,6 +276,10 @@ where
             server: crate::SERVER_VERSION.into(),
             heartbeat_secs: config.control.heartbeat_secs,
             domain_suffix: config.http.domain_suffix.clone(),
+            // 每次握手读一下目录。连接一天也就几次，比起缓存还得想什么时候失效，
+            // 直接读简单得多——管理员丢个新包进去，下一个连上来的人就能看到。
+            latest_client: config.latest_client_version(),
+            download_url: config.admin.download_url.clone(),
         })
         .await?;
 

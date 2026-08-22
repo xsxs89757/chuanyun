@@ -36,6 +36,20 @@ pub struct Status {
     pub tunnels: Vec<TunnelStatus>,
     /// 我接入的别人的服务
     pub connects: Vec<ConnectStatus>,
+    /// 服务端上有比当前更新的客户端。
+    ///
+    /// 连上时服务端顺手告诉我们它那里最新的包是哪个版本（它看自己的下载目录），
+    /// 比当前版本新就填上。不用另外去查 GitHub：国内办公室常常连不上，API
+    /// 还按出口 IP 限流，全公司一个 IP 几下就用完了。
+    pub update: Option<UpdateAvailable>,
+}
+
+/// 有新版本可用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateAvailable {
+    pub version: String,
+    /// 去哪下载；服务端没配 download_url 时为空，界面就只提示不给链接
+    pub url: Option<String>,
 }
 
 /// 一条接入的当前状态。
@@ -317,12 +331,27 @@ async fn supervisor(
                 if let Some(reply) = login_reply.take() {
                     let _ = reply.send(Ok(()));
                 }
+                // 服务端那边最新的包比我新，就记下来给界面提示。
+                // 比较用 update 模块那套（去 v 前缀、按数字比），别按字符串比——
+                // "0.1.10" 按字符串是小于 "0.1.9" 的。
+                let update = conn.latest_client.as_ref().and_then(|latest| {
+                    crate::update::is_newer(latest, env!("CARGO_PKG_VERSION")).then(|| {
+                        UpdateAvailable {
+                            version: latest.clone(),
+                            url: conn.download_url.clone(),
+                        }
+                    })
+                });
+                if let Some(u) = &update {
+                    tracing::info!(version = %u.version, "服务端上有新版客户端");
+                }
                 set_status(&status, |s| {
                     s.connected = true;
                     s.needs_login = false;
                     s.reconnect_attempt = 0;
                     s.last_error = None;
                     s.domain_suffix = conn.domain_suffix.clone();
+                    s.update = update;
                 });
 
                 let outcome = session(

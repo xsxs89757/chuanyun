@@ -151,6 +151,10 @@ pub struct Connection {
     commands: mpsc::Sender<Command>,
     pub domain_suffix: String,
     pub session: String,
+    /// 服务端上能下载到的最新客户端版本（服务端没放安装包则为空）
+    pub latest_client: Option<String>,
+    /// 有新版时去哪下载
+    pub download_url: Option<String>,
     cancel: CancellationToken,
 }
 
@@ -275,12 +279,14 @@ pub async fn connect(
         .ok_or_else(|| ConnectError::Protocol("服务端没有响应就关闭了连接".into()))?
         .map_err(|e| ConnectError::Protocol(e.to_string()))?;
 
-    let (session, domain_suffix) = match welcome {
+    let (session, domain_suffix, latest_client, download_url) = match welcome {
         ServerMsg::Welcome {
             session,
             domain_suffix,
+            latest_client,
+            download_url,
             ..
-        } => (session, domain_suffix),
+        } => (session, domain_suffix, latest_client, download_url),
         ServerMsg::Error { code, message, .. } => {
             let text = if message.is_empty() {
                 cy_proto::error::human(&code).to_string()
@@ -323,6 +329,8 @@ pub async fn connect(
         commands: cmd_tx,
         domain_suffix,
         session,
+        latest_client,
+        download_url,
         cancel,
     })
 }

@@ -356,11 +356,19 @@ sudo chown -R chuanyun /var/lib/chuanyun/downloads
 ```
 
 Only `.dmg`, `.msi`, and `.exe` are recognised; anything else in that directory is neither
-listed nor downloadable. To use a different directory:
+listed nor downloadable.
+
+**This directory also drives update prompts**: when a client connects, the server looks at
+the newest package here, and if it's newer than the client, the client shows an "update
+available" banner. Shipping a new version is just dropping the package in and removing the
+old one.
+
+To use a different directory, or to give the banner a link:
 
 ```toml
 [admin]
 download_dir = "/opt/chuanyun/pkgs"
+download_url = "https://t.example.com/download"   # where the banner's button goes
 ```
 
 The page lives on the admin interface (`127.0.0.1:7001` by default). **Proxy only the two

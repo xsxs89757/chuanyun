@@ -231,6 +231,7 @@ fn wire_callbacks(window: &AppWindow, engine: &Engine, runtime: &Arc<tokio::runt
     {
         let runtime = runtime.clone();
         let weak = window.as_weak();
+        let engine = engine.clone();
         window.on_check_update(move || {
             let weak = weak.clone();
             let update_url = cy_core::brand::embedded().update_url;
@@ -239,6 +240,18 @@ fn wire_callbacks(window: &AppWindow, engine: &Engine, runtime: &Arc<tokio::runt
                 w.set_update_text("".into());
                 w.set_update_url("".into());
             }
+
+            // 服务端连上时已经告诉过我们了，直接用——它的下载页才是同事该去的地方。
+            // 只有服务端没放安装包（没说）的时候才退回去查 GitHub。
+            if let Some(u) = engine.status().update {
+                if let Some(w) = weak.upgrade() {
+                    w.set_update_checking(false);
+                    w.set_update_text(format!("有新版本 {}", u.version).into());
+                    w.set_update_url(u.url.unwrap_or_default().into());
+                }
+                return;
+            }
+
             runtime.spawn(async move {
                 let result = cy_core::update::check(&update_url, env!("CARGO_PKG_VERSION")).await;
                 let _ = slint::invoke_from_event_loop(move || {
@@ -379,6 +392,16 @@ fn apply_status(window: &AppWindow, status: &Status) {
     window.set_reconnect_attempt(status.reconnect_attempt as i32);
     window.set_domain_suffix(status.domain_suffix.clone().into());
     window.set_status_text(status_text(status).into());
+    match &status.update {
+        Some(u) => {
+            window.set_update_banner_version(u.version.clone().into());
+            window.set_update_banner_url(u.url.clone().unwrap_or_default().into());
+        }
+        None => {
+            window.set_update_banner_version("".into());
+            window.set_update_banner_url("".into());
+        }
+    }
 
     let rows: Vec<TunnelUi> = status
         .tunnels

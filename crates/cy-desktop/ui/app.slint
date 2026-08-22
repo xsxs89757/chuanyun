@@ -184,6 +184,11 @@ export component AppWindow inherits Window {
     in property <bool> update-checking;
     // 非空表示有新版本可下载
     in property <string> update-url;
+    // 服务端连上时告诉我们的新版本；非空就在隧道页顶上挂一条横幅
+    in property <string> update-banner-version;
+    in property <string> update-banner-url;
+    // 用户点了「知道了」就这一次不再显示（重开应用会再提示——那是故意的）
+    property <bool> update-banner-dismissed: false;
 
     // ---- 由界面触发 ----
     callback login(string, string, string);
@@ -319,6 +324,34 @@ export component AppWindow inherits Window {
             }
         }
         Rectangle { height: 1px; background: Theme.line; }
+
+        // 有新版本：一条横幅，不弹窗。启动就弹窗太打扰，何况这不是非装不可的事。
+        if root.update-banner-version != "" && !root.update-banner-dismissed: Rectangle {
+            background: Theme.accent-soft;
+            height: 40px;
+            HorizontalLayout {
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                spacing: 10px;
+                Text {
+                    text: @tr("有新版本 {}，建议更新", root.update-banner-version);
+                    font-size: 12px;
+                    color: Theme.accent-ink;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                if root.update-banner-url != "": Button {
+                    text: @tr("去下载");
+                    primary: true;
+                    clicked => { root.open-url(root.update-banner-url); }
+                }
+                Button {
+                    text: @tr("知道了");
+                    clicked => { root.update-banner-dismissed = true; }
+                }
+            }
+        }
 
         // ---- 隧道页 ----
         if root.page == 0: VerticalLayout {

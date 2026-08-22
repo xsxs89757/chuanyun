@@ -83,6 +83,18 @@ struct StatusBody {
     reconnect_attempt: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_error: Option<String>,
+    /// 当前客户端版本
+    version: &'static str,
+    /// 服务端上有更新的版本时才出现
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update: Option<UpdateBody>,
+}
+
+#[derive(Serialize)]
+struct UpdateBody {
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
 }
 
 async fn status(State(engine): State<Arc<Engine>>) -> Json<StatusBody> {
@@ -93,6 +105,11 @@ async fn status(State(engine): State<Arc<Engine>>) -> Json<StatusBody> {
         needs_login: s.needs_login,
         reconnect_attempt: s.reconnect_attempt,
         last_error: s.last_error,
+        version: env!("CARGO_PKG_VERSION"),
+        update: s.update.map(|u| UpdateBody {
+            version: u.version,
+            url: u.url,
+        }),
     })
 }
 

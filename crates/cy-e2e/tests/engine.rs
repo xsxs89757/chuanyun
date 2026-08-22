@@ -537,3 +537,104 @@ async fn the_password_survives_a_server_restart() {
         .unwrap();
     assert_eq!(ok.status(), 200, "带对口令仍然能进");
 }
+
+// ================= 升级提示 =================
+
+/// 服务端下载目录里有比我新的包，连上之后状态里就要有「有新版本」。
+///
+/// 这是升级体系的全部链路：管理员把包丢进目录 → 握手时服务端看一眼目录 →
+/// 客户端比对自己的版本 → 界面挂横幅。不经 GitHub，不经另外的 HTTP 接口。
+#[tokio::test]
+async fn a_newer_package_on_the_server_shows_up_as_an_update() {
+    let downloads = tempfile::tempdir().unwrap();
+    // 比任何真实版本都大，保证「比当前新」
+    std::fs::write(
+        downloads.path().join("chuanyun-99.0.0-macos-universal.dmg"),
+        b"x",
+    )
+    .unwrap();
+    std::fs::write(
+        downloads.path().join("chuanyun-98.0.0-windows-x86_64.msi"),
+        b"x",
+    )
+    .unwrap();
+
+    let dl = downloads.path().to_path_buf();
+    let server = TestServer::start_with(move |c| {
+        c.admin.download_dir = Some(dl);
+        c.admin.download_url = Some("https://t.example.com/download".into());
+    })
+    .await;
+    let token = server.add_user("zhangsan").await;
+
+    let engine = Engine::start(None, brand(&server));
+    engine
+        .login(
+            server.handle.control_addr.to_string(),
+            &token,
+            &server.handle.fingerprint,
+        )
+        .await
+        .expect("登录");
+
+    let update = engine.status().update.expect("应该提示有新版本");
+    assert_eq!(update.version, "99.0.0", "取目录里最新的那个");
+    assert_eq!(
+        update.url.as_deref(),
+        Some("https://t.example.com/download"),
+        "下载地址来自服务端配置"
+    );
+}
+
+/// 服务端没放安装包就什么都不提示——别拿服务端自己的版本号冒充。
+#[tokio::test]
+async fn no_packages_on_the_server_means_no_update_prompt() {
+    let empty = tempfile::tempdir().unwrap();
+    let dl = empty.path().to_path_buf();
+    let server = TestServer::start_with(move |c| {
+        c.admin.download_dir = Some(dl);
+    })
+    .await;
+    let token = server.add_user("zhangsan").await;
+
+    let engine = Engine::start(None, brand(&server));
+    engine
+        .login(
+            server.handle.control_addr.to_string(),
+            &token,
+            &server.handle.fingerprint,
+        )
+        .await
+        .expect("登录");
+
+    assert!(engine.status().update.is_none());
+}
+
+/// 目录里的包和我一样新或更旧，也不提示。
+#[tokio::test]
+async fn an_older_package_is_not_an_update() {
+    let downloads = tempfile::tempdir().unwrap();
+    std::fs::write(
+        downloads.path().join("chuanyun-0.0.1-macos-universal.dmg"),
+        b"x",
+    )
+    .unwrap();
+    let dl = downloads.path().to_path_buf();
+    let server = TestServer::start_with(move |c| {
+        c.admin.download_dir = Some(dl);
+    })
+    .await;
+    let token = server.add_user("zhangsan").await;
+
+    let engine = Engine::start(None, brand(&server));
+    engine
+        .login(
+            server.handle.control_addr.to_string(),
+            &token,
+            &server.handle.fingerprint,
+        )
+        .await
+        .expect("登录");
+
+    assert!(engine.status().update.is_none(), "0.0.1 不比当前版本新");
+}
