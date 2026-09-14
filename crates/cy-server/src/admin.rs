@@ -17,7 +17,7 @@ use std::sync::Arc;
 use axum::extract::{Path, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
@@ -43,6 +43,17 @@ pub async fn serve(
     state: AdminState,
     shutdown: CancellationToken,
 ) {
+    let server = axum::serve(listener, router(state)).with_graceful_shutdown(async move {
+        shutdown.cancelled().await;
+    });
+    if let Err(e) = server.await {
+        tracing::warn!(error = %e, "管理接口结束");
+    }
+}
+
+/// 管理接口的全部路由。`serve()` 和测试共用这一份：公开/私有怎么划分只写在这里，
+/// 测试里另抄一份迟早和线上对不上。
+fn router(state: AdminState) -> Router {
     // 下载页和版本接口本来就该让浏览器访问：前者是同事拿安装包的地方，
     // 后者是客户端查更新用的。套上 guard_local_only 它们就永远打不开——
     // 浏览器必发 Sec-Fetch-Site，经 nginx 反代后 Host 也不是回环地址。
@@ -50,27 +61,25 @@ pub async fn serve(
     let public = Router::new()
         .route("/api/client/version", get(client_version))
         .route("/download", get(download_page))
+        .route("/download/", get(download_page_with_slash))
         .route("/download/{file}", get(download_file))
         .with_state(state.clone());
 
     // 其余接口能踢人、能列用户和审计，仍然只许本机用命令行调。
+    //
+    // 必须是 route_layer 而不是 layer：layer 连兜底的 404 一起包进去，合并之后
+    // 任何没匹配上的路径都要先过这道闸。经 nginx 来的 Host 是公网域名，于是
+    // /download/ 这种地址拿到的是「Host 必须是 127.0.0.1」的 403，看着像 nginx 配错了。
     let private = Router::new()
         .route("/status", get(status))
         .route("/tunnels", get(tunnels))
         .route("/users", get(users))
         .route("/kick/{user}", post(kick))
         .route("/audit", get(audit))
-        .layer(axum::middleware::from_fn(guard_local_only))
+        .route_layer(axum::middleware::from_fn(guard_local_only))
         .with_state(state);
 
-    let app = public.merge(private);
-
-    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
-        shutdown.cancelled().await;
-    });
-    if let Err(e) = server.await {
-        tracing::warn!(error = %e, "管理接口结束");
-    }
+    public.merge(private)
 }
 
 /// 挡住浏览器发起的请求，以及 Host 不是回环的请求。
@@ -216,6 +225,16 @@ async fn client_version() -> Json<ClientVersion> {
         version: crate::SERVER_VERSION,
         notes: "",
     })
+}
+
+/// `/download/` 跳回 `/download`。手打或从聊天里复制的地址常常多一个斜杠。
+///
+/// 不在这里直接出页面：页面上的按钮是相对链接 `download/<文件名>`，从带斜杠的
+/// 地址解析会变成 `/download/download/<文件名>`。跳转地址也必须是相对的——
+/// 部署文档让人把下载页挂在 `/chuanyun/download` 这类前缀下，写死 `/download`
+/// 就跳出前缀了；`../download` 在两种挂法下都落回页面本身。
+async fn download_page_with_slash() -> Redirect {
+    Redirect::permanent("../download")
 }
 
 /// 下载页：新同事拿这个链接装客户端。
@@ -392,21 +411,10 @@ mod tests {
         }
     }
 
+    /// 线上那一份路由（`serve()` 调的也是它）。测公开/私有的划分必须用这个，
+    /// 用下面那个简化版会把「下载页有没有被 guard 挡住」这件事测漏。
     fn real_app_with(st: AdminState) -> Router {
-        let public = Router::new()
-            .route("/api/client/version", get(client_version))
-            .route("/download", get(download_page))
-            .route("/download/{file}", get(download_file))
-            .with_state(st.clone());
-        let private = Router::new()
-            .route("/status", get(status))
-            .route("/tunnels", get(tunnels))
-            .route("/users", get(users))
-            .route("/kick/{user}", post(kick))
-            .route("/audit", get(audit))
-            .layer(axum::middleware::from_fn(guard_local_only))
-            .with_state(st);
-        public.merge(private)
+        router(st)
     }
 
     async fn body_of(app: Router, uri: &str) -> (StatusCode, String) {
@@ -431,8 +439,6 @@ mod tests {
             .with_state(state())
     }
 
-    /// 和 `serve()` 里一模一样的路由组装。测公开/私有的划分必须用这个，
-    /// 用上面那个简化版会把「下载页有没有被 guard 挡住」这件事测漏。
     fn real_app() -> Router {
         real_app_with(state())
     }
@@ -459,6 +465,37 @@ mod tests {
                 StatusCode::OK,
                 "{uri} 应该能在浏览器里打开"
             );
+        }
+    }
+
+    /// 带斜杠的地址原来匹配不到路由，落进被 guard 包住的兜底，经 nginx 过来
+    /// 就是一句「Host 必须是 127.0.0.1」的 403——线上真这么报过。
+    #[tokio::test]
+    async fn download_page_with_trailing_slash_goes_back_to_the_page() {
+        let req = HttpRequest::builder()
+            .uri("/download/")
+            .header("host", "t.example.com")
+            .header("sec-fetch-site", "none")
+            .header("user-agent", "Mozilla/5.0")
+            .body(Body::empty())
+            .unwrap();
+        let res = real_app().oneshot(req).await.unwrap();
+        assert!(
+            res.status().is_redirection(),
+            "/download/ 应该跳转，实际 {}",
+            res.status()
+        );
+        // 相对地址：挂在 /chuanyun/download/ 下要回到 /chuanyun/download，不能跳出前缀
+        assert_eq!(res.headers()["location"], "../download");
+    }
+
+    /// 没有这条路由就该是 404。兜底原来也套着 guard，经 nginx 来的请求一律 403，
+    /// 报错还说 Host 不对，排查时会先去怀疑 nginx。
+    #[tokio::test]
+    async fn unknown_paths_are_not_found_not_forbidden() {
+        for uri in ["/downloadx", "/download/a/b", "/nope"] {
+            let (code, body) = body_of(real_app(), uri).await;
+            assert_eq!(code, StatusCode::NOT_FOUND, "{uri} 应是 404，实际 {body}");
         }
     }
 
@@ -544,7 +581,7 @@ mod tests {
             let st = state_with_downloads(dir.path().to_path_buf());
             let (code, body) = body_of(real_app_with(st), &format!("/download/{evil}")).await;
             // 具体是 400 还是 404 不重要（axum 归一化后有些根本匹配不到这条路由，
-            // 会落到带 guard 的那组拿 403）——重要的是绝不能成功。
+            // 落到兜底拿 404）——重要的是绝不能成功。
             assert!(!code.is_success(), "{evil} 应被拒，实际 {code}");
             assert!(!body.contains("root:"), "{evil} 读到了 /etc/passwd");
         }
