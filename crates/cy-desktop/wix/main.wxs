@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='windows-1252'?>
+<?xml version="1.0" encoding="utf-8"?>
 <!--
   Copyright (C) 2017 Christopher R. Field.
 
@@ -58,13 +58,18 @@
 
 <Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
 
+    <!-- 中文字符串 + 1252 代码页 = 装完一片乱码：文件本身是 UTF-8，声明成 windows-1252
+         之后 candle 会把每个汉字的三个字节当三个西欧字符读进去，安装向导、开始菜单、
+         「应用和功能」里看到的就是 ç©¿äº‘ 这种东西。
+         所以文件声明 utf-8，数据库代码页用 936（GBK），语言 2052（简体中文）。
+         Windows Installer 不认 65001，别改成 UTF-8 代码页。 -->
     <Product
         Id='*'
         Name='穿云'
         UpgradeCode='4C5285D2-E51B-4916-B797-639D77E79678'
         Manufacturer='穿云'
-        Language='1033'
-        Codepage='1252'
+        Language='2052'
+        Codepage='936'
         Version='$(var.Version)'>
 
         <Package Id='*'
@@ -72,15 +77,15 @@
             Description='穿云桌面客户端（Slint）'
             Manufacturer='穿云'
             InstallerVersion='450'
-            Languages='1033'
+            Languages='2052'
             Compressed='yes'
             InstallScope='perMachine'
-            SummaryCodepage='1252'
+            SummaryCodepage='936'
             />
 
         <MajorUpgrade
             Schedule='afterInstallInitialize'
-            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+            DowngradeErrorMessage='已经装了更新版本的 [ProductName]，安装程序现在退出。'/>
 
         <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
         <Property Id='DiskPrompt' Value='穿云 安装程序'/>
@@ -152,8 +157,8 @@
 
         <Feature
             Id='Binaries'
-            Title='Application'
-            Description='Installs all binaries and the license.'
+            Title='穿云'
+            Description='安装程序本体和许可证。'
             Level='1'
             ConfigurableDirectory='APPLICATIONFOLDER'
             AllowAdvertise='no'
@@ -170,8 +175,8 @@
 
             <Feature
                 Id='Environment'
-                Title='PATH Environment Variable'
-                Description='Add the install location of the [ProductName] executable to the PATH system environment variable. This allows the [ProductName] executable to be called from any location.'
+                Title='加入 PATH 环境变量'
+                Description='把 [ProductName] 的安装目录加入系统 PATH，在任何位置都能从命令行启动它。'
                 Level='1'
                 Absent='allow'>
                 <ComponentRef Id='Path'/>

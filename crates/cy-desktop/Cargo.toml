@@ -37,3 +37,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 
 [build-dependencies]
 slint-build.workspace = true
+
+# 安装向导本身（欢迎页、按钮、许可证页）走 WiX 自带的简体中文文案；
+# 不写这一行 cargo-wix 默认 en-US，界面英文、我们自己的中文字符串照样能正常显示。
+[package.metadata.wix]
+culture = "zh-CN"
