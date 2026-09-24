@@ -25,7 +25,11 @@ pub fn human(code: &str) -> &str {
         self::code::AUTH_EXPIRED => "凭证已过期，请联系管理员重新发放",
         self::code::AUTH_REVOKED => "凭证已被吊销，请联系管理员",
         self::code::VERSION => "客户端版本过旧，请到下载页更新",
-        self::code::SUBDOMAIN_TAKEN => "该隧道名已被占用，请换一个名称",
+        // 隧道名前面带着用户名，别人撞不上——占着它的多半是你自己的另一个连接。
+        // 只说「请换一个名称」会把人引去改名，而改了名公网地址就跟着变了。
+        self::code::SUBDOMAIN_TAKEN => {
+            "该隧道名已被占用：多半是你在另一台电脑、或另一个没退出的穿云里开着同名隧道，关掉那边即可；都不是的话再换个名称"
+        }
         self::code::NAME_RESERVED => "该名称是保留字，请换一个名称",
         self::code::NAME_INVALID => "名称只能用小写字母、数字和连字符（它会成为域名的一部分），且不能以连字符开头或结尾；中文名用拼音，如 zhangsan",
         self::code::PORT_TAKEN => "指定的公网端口已被占用",

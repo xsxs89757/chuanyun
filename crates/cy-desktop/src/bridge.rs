@@ -337,8 +337,7 @@ fn wire_tray(
         let weak = window.as_weak();
         tray.on_show_window(move || {
             if let Some(w) = weak.upgrade() {
-                let _ = w.show();
-                w.window().set_minimized(false);
+                bring_to_front(&w);
             }
         });
     }
@@ -356,9 +355,21 @@ fn wire_tray(
         });
     }
 
-    tray.on_quit(move || {
-        let _ = slint::quit_event_loop();
-    });
+    {
+        let engine = engine.clone();
+        let handle = runtime.handle().clone();
+        tray.on_quit(move || crate::quit::request(&engine, &handle));
+    }
+}
+
+/// 把主窗口叫到最前面：藏在托盘里的要显示出来，最小化的要还原，压在别的窗口
+/// 后面的要顶上来——光 `show()` 只管显示，不管层级。
+pub fn bring_to_front(w: &AppWindow) {
+    use slint::winit_030::WinitWindowAccessor;
+
+    let _ = w.show();
+    w.window().set_minimized(false);
+    w.window().with_winit_window(|win| win.focus_window());
 }
 
 /// 定时把引擎状态刷到界面上。

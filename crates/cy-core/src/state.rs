@@ -89,6 +89,11 @@ impl Default for Settings {
 impl State {
     /// 状态文件的默认位置。
     pub fn default_path() -> Option<PathBuf> {
+        // 验证脚本和排查问题时用：让这个实例用一个单独的目录，不碰正在用的那份配置。
+        // 目录不同就是互不相干的两个穿云——单实例的锁文件也跟着放在这个目录里。
+        if let Some(dir) = std::env::var_os("CHUANYUN_CONFIG_DIR").filter(|d| !d.is_empty()) {
+            return Some(PathBuf::from(dir).join("state.json"));
+        }
         let dirs = directories::ProjectDirs::from("cn", "chuanyun", "chuanyun")?;
         Some(dirs.config_dir().join("state.json"))
     }

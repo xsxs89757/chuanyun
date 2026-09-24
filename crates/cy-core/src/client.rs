@@ -144,6 +144,43 @@ pub enum ConnectError {
     Rejected(String),
 }
 
+/// 开隧道失败的原因。
+///
+/// 带着错误码：引擎要靠它分清「名字正被占着」这种过一会儿可能自己好的，
+/// 和「名字不合法」这种重试多少次都没用的。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenError {
+    /// 服务端给的错误码；连接断了这类本地失败没有码
+    pub code: Option<String>,
+    /// 给人看的原因
+    pub message: String,
+}
+
+impl OpenError {
+    fn local(message: impl Into<String>) -> Self {
+        Self {
+            code: None,
+            message: message.into(),
+        }
+    }
+
+    /// 名字正被占着。
+    ///
+    /// 隧道名前面带着用户名，占着它的多半是自己的另一条连接——包括上一条还没被
+    /// 服务端清理掉的：断线重连时服务端要等几次心跳没回应才认定旧连接已死。
+    pub fn is_taken(&self) -> bool {
+        self.code.as_deref() == Some(cy_proto::error::code::SUBDOMAIN_TAKEN)
+    }
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for OpenError {}
+
 /// 已建立的连接。
 #[derive(Debug)]
 pub struct Connection {
@@ -151,6 +188,9 @@ pub struct Connection {
     commands: mpsc::Sender<Command>,
     pub domain_suffix: String,
     pub session: String,
+    /// 服务端的心跳间隔（秒）。服务端连续 3 次收不到回应才判定连接已死，
+    /// 所以「旧连接还占着名字」最多持续几个心跳——引擎按它来定重试多久。
+    pub heartbeat_secs: u64,
     /// 服务端上能下载到的最新客户端版本（服务端没放安装包则为空）
     pub latest_client: Option<String>,
     /// 有新版时去哪下载
@@ -158,6 +198,8 @@ pub struct Connection {
     /// 之后每次心跳刷新的最新版本信息；引擎盯着它，连着不断也能知道有新包
     latest: tokio::sync::watch::Receiver<LatestClient>,
     cancel: CancellationToken,
+    /// 控制循环。退出时要等它把控制流关掉，见 [`Connection::close`]
+    control_task: tokio::task::JoinHandle<()>,
 }
 
 /// 服务端最近一次心跳里报的最新客户端版本。
@@ -170,7 +212,7 @@ pub struct LatestClient {
 enum Command {
     Open {
         spec: TunnelSpec,
-        reply: oneshot::Sender<Result<String, String>>,
+        reply: oneshot::Sender<Result<String, OpenError>>,
     },
     Close {
         name: String,
@@ -179,13 +221,13 @@ enum Command {
 
 impl Connection {
     /// 开一条隧道，返回公网地址。
-    pub async fn open_tunnel(&self, spec: TunnelSpec) -> Result<String, String> {
+    pub async fn open_tunnel(&self, spec: TunnelSpec) -> Result<String, OpenError> {
         let (reply, rx) = oneshot::channel();
         self.commands
             .send(Command::Open { spec, reply })
             .await
-            .map_err(|_| "连接已断开".to_string())?;
-        rx.await.map_err(|_| "连接已断开".to_string())?
+            .map_err(|_| OpenError::local("连接已断开"))?;
+        rx.await.map_err(|_| OpenError::local("连接已断开"))?
     }
 
     pub async fn close_tunnel(&self, name: impl Into<String>) {
@@ -197,6 +239,16 @@ impl Connection {
 
     pub fn disconnect(&self) {
         self.cancel.cancel();
+    }
+
+    /// 断开，并等控制循环把控制流关掉（最多等 `grace`）。
+    ///
+    /// 控制流一关，服务端当场注销这个会话、放掉它占着的隧道名。只 cancel 不等的话，
+    /// 紧接着退出进程时这一步可能还没轮到执行——那就只能指望 TCP 断开的信号
+    /// 送到服务端，送不到（中间有网关吞包）就得等它几次心跳超时。
+    pub async fn close(self, grace: Duration) {
+        self.cancel.cancel();
+        let _ = tokio::time::timeout(grace, self.control_task).await;
     }
 
     /// 订阅心跳带来的最新版本信息。
@@ -221,7 +273,7 @@ struct Route {
 type PortMap = Arc<RwLock<HashMap<String, Route>>>;
 
 /// 已发出但还没收到回应的开隧道请求：隧道 ID → (名称, 本地端口, 回调)。
-type PendingOpens = HashMap<String, (String, u16, oneshot::Sender<Result<String, String>>)>;
+type PendingOpens = HashMap<String, (String, u16, oneshot::Sender<Result<String, OpenError>>)>;
 
 /// 建立一条连接：TCP → TLS → yamux → 控制流握手。
 ///
@@ -293,14 +345,21 @@ pub async fn connect(
         .ok_or_else(|| ConnectError::Protocol("服务端没有响应就关闭了连接".into()))?
         .map_err(|e| ConnectError::Protocol(e.to_string()))?;
 
-    let (session, domain_suffix, latest_client, download_url) = match welcome {
+    let (session, heartbeat_secs, domain_suffix, latest_client, download_url) = match welcome {
         ServerMsg::Welcome {
             session,
+            heartbeat_secs,
             domain_suffix,
             latest_client,
             download_url,
             ..
-        } => (session, domain_suffix, latest_client, download_url),
+        } => (
+            session,
+            heartbeat_secs,
+            domain_suffix,
+            latest_client,
+            download_url,
+        ),
         ServerMsg::Error { code, message, .. } => {
             let text = if message.is_empty() {
                 cy_proto::error::human(&code).to_string()
@@ -330,7 +389,7 @@ pub async fn connect(
         version: latest_client.clone(),
         download_url: download_url.clone(),
     });
-    tokio::spawn(control_loop(
+    let control_task = tokio::spawn(control_loop(
         framed,
         cmd_rx,
         ports,
@@ -348,10 +407,12 @@ pub async fn connect(
         commands: cmd_tx,
         domain_suffix,
         session,
+        heartbeat_secs,
         latest_client,
         download_url,
         latest: latest_rx,
         cancel,
+        control_task,
     })
 }
 
@@ -389,7 +450,7 @@ async fn control_loop(
                             remote_port: None,
                         };
                         if sink.send(msg).await.is_err() {
-                            let _ = reply.send(Err("连接已断开".into()));
+                            let _ = reply.send(Err(OpenError::local("连接已断开")));
                             break "连接已断开".to_string();
                         }
                         pending.insert(id, (spec.name, spec.local_port, reply));
@@ -451,7 +512,7 @@ async fn control_loop(
                                     name,
                                     reason: text.clone(),
                                 });
-                                let _ = reply.send(Err(text));
+                                let _ = reply.send(Err(OpenError { code: Some(code), message: text }));
                             }
                             None => {
                                 // 连接级错误：多半是凭证出了问题，重连也没用
@@ -474,7 +535,7 @@ async fn control_loop(
     cancel.cancel();
     // 还在等回应的请求得有个交代，别让调用方一直挂着
     for (_, (_, _, reply)) in pending {
-        let _ = reply.send(Err(reason.clone()));
+        let _ = reply.send(Err(OpenError::local(reason.clone())));
     }
     let _ = events.send(Event::Disconnected { reason });
 }

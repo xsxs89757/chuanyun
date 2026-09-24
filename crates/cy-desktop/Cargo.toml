@@ -17,7 +17,9 @@ path = "src/main.rs"
 cy-core.workspace = true
 cy-proto.workspace = true
 
-slint.workspace = true
+# unstable-winit-030：把窗口顶到最前（focus_window）要拿到底下的 winit 窗口。
+# 这个特性跟着 Slint 的次版本走，升级 Slint 时回头看一眼 bridge::bring_to_front。
+slint = { workspace = true, features = ["unstable-winit-030"] }
 tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
@@ -34,6 +36,9 @@ arboard = "3.6.1"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true

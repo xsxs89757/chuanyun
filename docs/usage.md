@@ -108,7 +108,7 @@ BASE=$(curl -sf 'localhost:7075/api/resolve?port=8082&plain=1' || echo "http://1
 
 | Endpoint | What it does |
 |---|---|
-| `GET /api/status` | Connected or not, and the domain suffix |
+| `GET /api/status` | Connected or not, the domain suffix, the client version and process id |
 | `GET /api/tunnels` | All current tunnels |
 | `POST /api/tunnels` | Register a tunnel; an object or an array. Optional `auth` (password), `domain` (custom domain) |
 | `DELETE /api/tunnels/{name}` | Unregister |
@@ -121,6 +121,8 @@ BASE=$(curl -sf 'localhost:7075/api/resolve?port=8082&plain=1' || echo "http://1
 | `GET /api/connects` | Current inbound links to colleagues' services |
 | `POST /api/connects` | Create one: `{"local_port":8082,"from":"zhangsan-api"}` |
 | `DELETE /api/connects/{port}` | Remove one |
+| `POST /api/show` | Bring the 穿云 window to the front |
+| `POST /api/quit` | Quit 穿云 (disconnects and releases the tunnel names first) |
 
 It binds to loopback only, and it **rejects requests that look like they came from a
 browser** — the threat being a malicious web page quietly probing your local services. So
@@ -246,6 +248,25 @@ Yes. The client reconnects and the tunnels come back, at the same addresses.
 
 No — that just hides it in the tray. Tunnels keep running. Use "quit" in the tray menu to
 actually exit.
+
+To get the window back, just launch it again from the shortcut: that brings up the copy
+that's already running instead of starting a second one. On Windows the tray icon is often
+tucked away behind the `^` at the right end of the taskbar.
+
+**A tunnel says the name is already taken**
+
+Tunnel names are prefixed with your username, so nobody else can take yours. What's holding
+it is almost always another connection of your own:
+
+- You quit and reopened right away, or the client just reconnected: the server may not have
+  dropped the old connection yet. The card says it's retrying; it comes up by itself,
+  usually within a minute.
+- The same tunnel is open on your other computer: close it there.
+- On 0.1.13 and earlier, launching the shortcut again after closing the window started a
+  second copy, and the second copy collided with the first. Once you upgrade to 0.1.14 and
+  launch it, it asks the old copy to quit.
+
+Don't rename the tunnel to get around it — the public address changes with the name.
 
 **Where is the config stored?**
 

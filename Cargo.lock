@@ -1355,7 +1355,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "cy-core"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "axum",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "cy-desktop"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1402,6 +1402,7 @@ dependencies = [
  "serde",
  "slint",
  "slint-build",
+ "tempfile",
  "tokio",
  "toml",
  "tracing",
@@ -1410,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "cy-e2e"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "axum",
@@ -1431,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "cy-proto"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "futures",
  "serde",
@@ -1445,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "cy-server"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "axum",
@@ -5365,9 +5366,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -5806,6 +5807,7 @@ checksum = "ce12038f57f8f3a423564b0c9301a2ab3fda4246e4cbadd6b97acf9124bdc315"
 dependencies = [
  "const-field-offset",
  "i-slint-backend-selector",
+ "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",
@@ -6213,7 +6215,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

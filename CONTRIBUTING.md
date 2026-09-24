@@ -70,7 +70,7 @@ assert_eq!(validate_user("admin"), Err(code::NAME_RESERVED));
 
 ```bash
 ./scripts/demo.sh               # 本机起全套，跑通完整链路
-./scripts/verify-desktop.sh     # 桌面端：自动连接、恢复隧道、本地 API
+./scripts/verify-desktop.sh     # 桌面端：自动连接、恢复隧道、本地 API、单实例与退出
 ./scripts/verify-vite-plugin.sh # 真 Vite 项目经隧道访问
 ./scripts/verify-install.sh     # 服务端安装脚本（要 Docker，25 项断言）
 ```

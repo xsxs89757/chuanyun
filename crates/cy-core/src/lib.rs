@@ -20,12 +20,15 @@ pub mod engine;
 pub mod inspector;
 pub mod local_api;
 pub mod localhost;
+pub mod peer;
 pub mod state;
 pub mod update;
 pub mod verifier;
 
 pub use backoff::Backoff;
-pub use client::{connect, Connection, CoreConfig, Event, TunnelSpec, Verify, CLIENT_VERSION};
+pub use client::{
+    connect, Connection, CoreConfig, Event, OpenError, TunnelSpec, Verify, CLIENT_VERSION,
+};
 pub use cy_proto::PROTO_VERSION;
 pub use engine::{Brand, Engine, Status, TunnelStatus, UpdateAvailable};
 pub use state::State;

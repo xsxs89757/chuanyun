@@ -99,7 +99,7 @@ async fn exhausted_port_pool_reports_clearly() {
         .open_tunnel(TunnelSpec::tcp("b", echo))
         .await
         .expect_err("池子已空，第二条应当失败");
-    assert!(err.contains("端口"), "错误该说人话，实际：{err}");
+    assert!(err.message.contains("端口"), "错误该说人话，实际：{err}");
 }
 
 /// 隧道关掉之后端口要还回池子，否则开开关关几次就把池子漏光了。

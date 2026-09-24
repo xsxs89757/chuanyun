@@ -17,7 +17,9 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::backoff::Backoff;
-use crate::client::{self, ConnectError, Connection, CoreConfig, Event, TunnelSpec, Verify};
+use crate::client::{
+    self, ConnectError, Connection, CoreConfig, Event, OpenError, TunnelSpec, Verify,
+};
 use crate::connect::{ActiveConnect, ConnectSpec};
 use crate::inspector::Inspector;
 use crate::state::State;
@@ -149,6 +151,8 @@ pub struct Engine {
     events: broadcast::Sender<Event>,
     status: Arc<RwLock<Status>>,
     inspector: Inspector,
+    /// 主循环退出后变成 true。退出应用前要等到它，见 [`Engine::shutdown`]
+    stopped: tokio::sync::watch::Receiver<bool>,
 }
 
 impl Engine {
@@ -158,17 +162,21 @@ impl Engine {
         let (events, _) = broadcast::channel(256);
         let status = Arc::new(RwLock::new(Status::default()));
         let inspector = Inspector::new();
+        let (stopped_tx, stopped) = tokio::sync::watch::channel(false);
 
         let engine = Engine {
             cmds: cmd_tx,
             events: events.clone(),
             status: status.clone(),
             inspector: inspector.clone(),
+            stopped,
         };
 
-        tokio::spawn(supervisor(
-            cmd_rx, events, status, state_path, brand, inspector,
-        ));
+        tokio::spawn(async move {
+            // 主循环不管从哪条路退出，都要让等着它的人知道
+            let _stopped = StoppedOnDrop(stopped_tx);
+            supervisor(cmd_rx, events, status, state_path, brand, inspector).await;
+        });
         engine
     }
 
@@ -296,8 +304,27 @@ impl Engine {
         }
     }
 
+    /// 停下引擎：断开连接，等主循环真的退出了才返回。
+    ///
+    /// 必须等：退出应用紧跟在这之后。以前只是把命令投进队列就返回，进程随即结束，
+    /// 连接有没有正常关掉全凭运气——没关掉的话服务端那边的旧会话还占着隧道名，
+    /// 下次打开就撞名。
+    ///
+    /// 最多等多久由调用方定：主循环正卡在连服务器的 TCP 握手里时，要等握手
+    /// 有了结果才轮得到处理这条命令。
     pub async fn shutdown(&self) {
         let _ = self.cmds.send(Cmd::Shutdown).await;
+        let mut stopped = self.stopped.clone();
+        let _ = stopped.wait_for(|s| *s).await;
+    }
+}
+
+/// 引擎主循环的任务一结束（正常退出或被运行时丢弃）就置位。
+struct StoppedOnDrop(tokio::sync::watch::Sender<bool>);
+
+impl Drop for StoppedOnDrop {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
     }
 }
 
@@ -499,10 +526,13 @@ async fn session(
     status: &Arc<RwLock<Status>>,
     connects: &mut Vec<ActiveConnect>,
 ) -> SessionEnd {
+    // 撞名的隧道过一会儿再试：旧连接可能还没被服务端清掉
+    let mut taken = TakenRetries::new(conn.heartbeat_secs);
+
     // 重连之后把期望态里开着的隧道全部重开——用户不该被要求「重新点一次开关」。
-    // 单条失败（比如撞名）不影响其余的，失败原因已经记进状态里给界面展示。
+    // 单条失败不影响其余的，失败原因已经记进状态里给界面展示。
     for spec in state.enabled_tunnels() {
-        let _ = open_and_record(&conn, &spec, status).await;
+        let _ = open_tracked(&conn, &spec, status, &mut taken).await;
     }
 
     // 睡眠唤醒检测：合盖再打开时，单调时钟没走多少但墙上时间跳了一大截。
@@ -541,13 +571,25 @@ async fn session(
                 if !conn.is_alive() {
                     return SessionEnd::Dropped("连接已断开".into());
                 }
+
+                for name in taken.due(Instant::now()) {
+                    // 等的这段时间里用户可能已经把它关了或删了
+                    match state.spec(&name).filter(|_| spec_enabled(state, &name)) {
+                        Some(spec) => {
+                            let _ = open_tracked(&conn, &spec, status, &mut taken).await;
+                        }
+                        None => taken.forget(&name),
+                    }
+                }
             }
 
             cmd = cmds.recv() => {
                 let Some(cmd) = cmd else { return SessionEnd::Shutdown };
                 match cmd {
                     Cmd::Shutdown => {
-                        conn.disconnect();
+                        // 等控制流真的关掉再走：服务端据此当场放掉这条连接占着的
+                        // 隧道名，下次打开（或新版本接管）就不会撞名
+                        conn.close(Duration::from_millis(500)).await;
                         return SessionEnd::Shutdown;
                     }
                     Cmd::Logout => {
@@ -595,11 +637,12 @@ async fn session(
                             if is_up {
                                 conn.close_tunnel(&spec.name).await;
                             }
-                            open_and_record(&conn, &spec, status).await
+                            open_tracked(&conn, &spec, status, &mut taken).await
                         };
                         let _ = reply.send(result);
                     }
                     Cmd::RemoveTunnel { name } => {
+                        taken.forget(&name);
                         conn.close_tunnel(&name).await;
                         state.remove_tunnel(&name);
                         save(state, state_path);
@@ -629,7 +672,7 @@ async fn session(
                         let result = match state.spec(&name) {
                             Some(spec) if spec_enabled(state, &name) => {
                                 conn.close_tunnel(&name).await;
-                                open_and_record(&conn, &spec, status).await
+                                open_tracked(&conn, &spec, status, &mut taken).await
                             }
                             _ => Ok(()),
                         };
@@ -648,9 +691,10 @@ async fn session(
                         if enabled {
                             // 从 state 取完整定义，别现拼——口令和自定义域名都在里面
                             if let Some(spec) = state.spec(&name) {
-                                let _ = open_and_record(&conn, &spec, status).await;
+                                let _ = open_tracked(&conn, &spec, status, &mut taken).await;
                             }
                         } else {
+                            taken.forget(&name);
                             conn.close_tunnel(&name).await;
                             set_status(status, |s| {
                                 if let Some(t) = s.tunnels.iter_mut().find(|t| t.name == name) {
@@ -683,11 +727,138 @@ fn spec_enabled(state: &State, name: &str) -> bool {
     state.tunnels.get(name).map(|e| e.enabled).unwrap_or(false)
 }
 
+/// 撞名之后隔多久再试。
+const TAKEN_RETRY_EVERY: Duration = Duration::from_secs(3);
+
+/// 撞名之后最多再等几个心跳。服务端连续 3 次心跳没回应才认定旧连接已死，
+/// 第 4 下才把它清掉；再留两个心跳的余量。
+const TAKEN_RETRY_HEARTBEATS: u32 = 6;
+
+/// 撞名、正在等服务端放手时卡片上的话。
+const TAKEN_RETRYING: &str = "隧道名还被上一条连接占着，等服务端清掉后会自动开通（正在重试）";
+
+/// 撞了名的隧道：过一会儿再试。
+///
+/// 断线重连、或者刚退出又马上打开时，服务端未必已经知道旧连接没了——TCP 断开的
+/// 信号可能半路丢了，那就要等旧连接连续几次心跳没回应。在那之前新连接去开同名
+/// 隧道只会被拒。以前拒了就不再试，隧道一直挂着「已被占用」，要用户手动拨一下开关。
+///
+/// 只管「名字被占」这一种错误：名字不合法、超出上限这些，重试多少次都一样。
+struct TakenRetries {
+    window: Duration,
+    every: Duration,
+    pending: BTreeMap<String, TakenRetry>,
+}
+
+struct TakenRetry {
+    give_up_at: Instant,
+    next_at: Instant,
+}
+
+/// 一次开通之后，这条隧道该怎么办。
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    /// 开通了，或者是别的错误——都不用再试
+    Done,
+    /// 还被占着，过一会儿再试；`first` 表示这是头一回撞上
+    Retrying { first: bool },
+    /// 等够了还被占着，多半真有另一个地方开着它
+    GaveUp,
+}
+
+impl TakenRetries {
+    fn new(heartbeat_secs: u64) -> Self {
+        let heartbeat = Duration::from_secs(heartbeat_secs.max(1));
+        Self {
+            window: heartbeat * TAKEN_RETRY_HEARTBEATS,
+            every: TAKEN_RETRY_EVERY.min(heartbeat),
+            pending: BTreeMap::new(),
+        }
+    }
+
+    fn record(&mut self, name: &str, result: &Result<(), OpenError>, now: Instant) -> Verdict {
+        match result {
+            Err(e) if e.is_taken() => {
+                let first = !self.pending.contains_key(name);
+                let retry = self.pending.entry(name.to_string()).or_insert(TakenRetry {
+                    give_up_at: now + self.window,
+                    next_at: now,
+                });
+                if now >= retry.give_up_at {
+                    self.pending.remove(name);
+                    Verdict::GaveUp
+                } else {
+                    retry.next_at = now + self.every;
+                    Verdict::Retrying { first }
+                }
+            }
+            _ => {
+                self.pending.remove(name);
+                Verdict::Done
+            }
+        }
+    }
+
+    /// 到点该再试的隧道。
+    fn due(&self, now: Instant) -> Vec<String> {
+        self.pending
+            .iter()
+            .filter(|(_, r)| r.next_at <= now)
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// 用户关掉或删掉了它，不用再等。
+    fn forget(&mut self, name: &str) {
+        self.pending.remove(name);
+    }
+}
+
+/// 开一条隧道；撞名的话记下来，稍后自动再试。
+async fn open_tracked(
+    conn: &Connection,
+    spec: &TunnelSpec,
+    status: &Arc<RwLock<Status>>,
+    taken: &mut TakenRetries,
+) -> Result<(), String> {
+    let result = open_and_record(conn, spec, status).await;
+    match taken.record(&spec.name, &result, Instant::now()) {
+        Verdict::Retrying { first: true } => {
+            tracing::info!(
+                name = %spec.name,
+                window = ?taken.window,
+                "隧道名被占着，可能是服务端还没清掉上一条连接，稍后自动重试"
+            );
+        }
+        Verdict::GaveUp => {
+            tracing::info!(name = %spec.name, "隧道名一直被占着，不再重试");
+            let text = cy_proto::error::human(cy_proto::error::code::SUBDOMAIN_TAKEN).to_string();
+            set_status(status, |s| {
+                if let Some(t) = s.tunnels.iter_mut().find(|t| t.name == spec.name) {
+                    t.error = Some(text.clone());
+                }
+            });
+            return Err(text);
+        }
+        Verdict::Retrying { first: false } | Verdict::Done => {}
+    }
+    result.map_err(|e| shown_error(&e))
+}
+
+/// 卡片上给这个错误显示什么。
+fn shown_error(e: &OpenError) -> String {
+    if e.is_taken() {
+        TAKEN_RETRYING.to_string()
+    } else {
+        e.message.clone()
+    }
+}
+
 async fn open_and_record(
     conn: &Connection,
     spec: &TunnelSpec,
     status: &Arc<RwLock<Status>>,
-) -> Result<(), String> {
+) -> Result<(), OpenError> {
     let result = conn.open_tunnel(spec.clone()).await;
     set_status(status, |s| {
         let entry = match s.tunnels.iter_mut().find(|t| t.name == spec.name) {
@@ -714,7 +885,7 @@ async fn open_and_record(
             }
             Err(e) => {
                 entry.url = None;
-                entry.error = Some(e.clone());
+                entry.error = Some(shown_error(e));
             }
         }
     });
@@ -996,6 +1167,89 @@ mod tests {
             effective_verify(&state, &Brand::default()),
             Verify::Tofu
         ));
+    }
+
+    fn taken() -> Result<(), OpenError> {
+        Err(OpenError {
+            code: Some(cy_proto::error::code::SUBDOMAIN_TAKEN.into()),
+            message: "该隧道名已被占用".into(),
+        })
+    }
+
+    #[test]
+    fn taken_names_are_retried_until_the_window_runs_out() {
+        // 心跳 15 秒：每 3 秒试一次，最多等 6 个心跳（90 秒）
+        let mut retries = TakenRetries::new(15);
+        let t0 = Instant::now();
+
+        assert_eq!(
+            retries.record("wx", &taken(), t0),
+            Verdict::Retrying { first: true }
+        );
+        assert!(retries.due(t0).is_empty(), "刚撞上不该马上再试");
+        assert_eq!(retries.due(t0 + Duration::from_secs(3)), vec!["wx"]);
+
+        let t1 = t0 + Duration::from_secs(3);
+        assert_eq!(
+            retries.record("wx", &taken(), t1),
+            Verdict::Retrying { first: false }
+        );
+
+        // 窗口从头一回撞上算起，不因为每次重试往后推
+        let late = t0 + Duration::from_secs(90);
+        assert_eq!(retries.record("wx", &taken(), late), Verdict::GaveUp);
+        assert!(
+            retries.due(late + Duration::from_secs(60)).is_empty(),
+            "放弃之后就别再试了"
+        );
+    }
+
+    #[test]
+    fn success_or_other_errors_stop_the_retries() {
+        let mut retries = TakenRetries::new(15);
+        let t0 = Instant::now();
+        retries.record("wx", &taken(), t0);
+        assert_eq!(retries.record("wx", &Ok(()), t0), Verdict::Done);
+        assert!(retries.due(t0 + Duration::from_secs(60)).is_empty());
+
+        // 名字不合法这类，重试多少次都一样
+        let invalid = Err(OpenError {
+            code: Some(cy_proto::error::code::NAME_INVALID.into()),
+            message: "名称不合法".into(),
+        });
+        assert_eq!(retries.record("Bad", &invalid, t0), Verdict::Done);
+        assert!(retries.due(t0 + Duration::from_secs(60)).is_empty());
+    }
+
+    #[test]
+    fn forgetting_a_tunnel_stops_its_retries() {
+        // 用户在等的时候把它关了或删了
+        let mut retries = TakenRetries::new(15);
+        let t0 = Instant::now();
+        retries.record("wx", &taken(), t0);
+        retries.forget("wx");
+        assert!(retries.due(t0 + Duration::from_secs(10)).is_empty());
+    }
+
+    #[test]
+    fn a_fast_heartbeat_shortens_the_retry_interval() {
+        // 测试环境心跳 1 秒：3 秒一试就只够试两次，间隔要跟着缩短
+        let mut retries = TakenRetries::new(1);
+        let t0 = Instant::now();
+        retries.record("wx", &taken(), t0);
+        assert_eq!(retries.due(t0 + Duration::from_secs(1)), vec!["wx"]);
+        assert_eq!(
+            retries.record("wx", &taken(), t0 + Duration::from_secs(6)),
+            Verdict::GaveUp
+        );
+    }
+
+    #[test]
+    fn taken_errors_read_as_a_wait_not_as_rename_it() {
+        // 以前这里显示「请换一个名称」：照着改名的话，公网地址就跟着变了
+        let shown = shown_error(&taken().unwrap_err());
+        assert!(shown.contains("自动"), "撞名时该说在重试：{shown}");
+        assert!(!shown.contains("请换一个名称"), "{shown}");
     }
 
     #[test]

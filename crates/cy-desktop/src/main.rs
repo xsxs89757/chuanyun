@@ -18,10 +18,13 @@
 mod bridge;
 #[cfg(target_os = "macos")]
 mod dock;
+mod instance;
+mod quit;
 mod tray;
 
 use std::sync::Arc;
 
+use cy_core::local_api::AppHooks;
 use cy_core::Engine;
 
 slint::include_modules!();
@@ -60,25 +63,60 @@ fn main() -> anyhow::Result<()> {
             .build()?,
     );
 
+    // 同一份配置只许一个穿云在跑。关窗只是收进托盘，再双击快捷方式时，要把已经在跑
+    // 的那个叫出来，而不是再起一个去撞同名隧道。见 instance 模块。
+    let port = state_path
+        .as_deref()
+        .map(|p| cy_core::State::load(p).settings.local_api_port)
+        .unwrap_or(cy_core::local_api::DEFAULT_PORT);
+    let lock_path = state_path
+        .as_ref()
+        .map(|p| p.with_file_name("instance.lock"));
+    let startup = instance::claim(&runtime, lock_path.as_deref(), port);
+    // 锁要攥到进程结束，由系统放开
+    let (_instance_lock, api_listener) = match startup {
+        instance::Startup::Primary { lock, listener } => (lock, listener),
+        instance::Startup::AlreadyRunning => std::process::exit(0),
+    };
+
     let brand = cy_core::brand::embedded();
     let engine = runtime.block_on(async { Engine::start(state_path, brand.clone()) });
-
-    // 本地 API：项目脚本靠它注册端口、查地址
-    {
-        let engine = engine.clone();
-        let port = cy_core::local_api::DEFAULT_PORT;
-        runtime.spawn(async move {
-            if let Err(e) = cy_core::local_api::serve(engine, port).await {
-                // 端口被占是常见情况（比如开了两个穿云），说清楚就好，别让应用起不来
-                tracing::warn!(port, error = %e, "本地 API 没能启动；脚本接入功能不可用");
-            }
-        });
-    }
 
     let window = AppWindow::new()?;
     let tray = tray::setup(&window)?;
 
     bridge::wire(&window, &tray, engine.clone(), runtime.clone());
+
+    // 本地 API：项目脚本靠它注册端口、查地址；另一个穿云启动时也靠它找到我们。
+    // 放在窗口建好之后，「把窗口叫出来」才有窗口可叫。
+    match api_listener {
+        Some(listener) => {
+            let hooks = AppHooks {
+                show: Some({
+                    let weak = window.as_weak();
+                    Arc::new(move || {
+                        tracing::info!("另一个穿云启动了，把窗口叫到前面");
+                        let _ = weak.upgrade_in_event_loop(|w| bridge::bring_to_front(&w));
+                    })
+                }),
+                quit: Some({
+                    let engine = engine.clone();
+                    let handle = runtime.handle().clone();
+                    Arc::new(move || {
+                        tracing::info!("新版本要接班，退出");
+                        quit::request(&engine, &handle);
+                    })
+                }),
+            };
+            let engine = engine.clone();
+            runtime.spawn(async move {
+                if let Err(e) = cy_core::local_api::serve_on(listener, engine, hooks).await {
+                    tracing::warn!(error = %e, "本地 API 停了；脚本接入功能不可用");
+                }
+            });
+        }
+        None => tracing::warn!(port, "本地 API 没能启动；脚本接入功能不可用"),
+    }
 
     // 关窗之后点 Dock 图标要能把窗口叫回来。winit 把 NSApplication 的 delegate
     // 装在事件循环启动那一刻，所以要先 show 一次把 AppKit 初始化完，再去挂。
@@ -108,7 +146,6 @@ fn main() -> anyhow::Result<()> {
 
     slint::run_event_loop()?;
 
-    // 关窗不等于退出（有托盘），真正退出时才收尾
-    runtime.block_on(async { engine.shutdown().await });
-    Ok(())
+    // 关窗不等于退出（有托盘），走到这里才是真退出：断开连接、收托盘图标、结束进程
+    quit::finish(&runtime, &engine, tray)
 }

@@ -133,7 +133,10 @@ async fn unregistered_custom_domain_is_refused() {
         .open_tunnel(TunnelSpec::http("api", 8080).with_domain("pay.example.com"))
         .await
         .expect_err("没登记过的域名不该给用");
-    assert!(err.contains("占用") || err.contains("保留"), "实际：{err}");
+    assert!(
+        err.message.contains("占用") || err.message.contains("保留"),
+        "实际：{err}"
+    );
 }
 
 /// 别人登记的域名，我也不能用。

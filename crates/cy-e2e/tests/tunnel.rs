@@ -75,7 +75,7 @@ async fn duplicate_tunnel_name_is_rejected() {
         .open_tunnel(TunnelSpec::http("wx", echo_port))
         .await
         .expect_err("同名隧道应被拒绝");
-    assert!(err.contains("占用"), "错误该说人话，实际是：{err}");
+    assert!(err.message.contains("占用"), "错误该说人话，实际是：{err}");
 }
 
 #[tokio::test]
@@ -91,7 +91,10 @@ async fn invalid_tunnel_name_is_rejected() {
         .open_tunnel(TunnelSpec::http("Bad_Name", 8080))
         .await
         .expect_err("非法名称应被拒绝");
-    assert!(err.contains("小写字母"), "错误该说人话，实际是：{err}");
+    assert!(
+        err.message.contains("小写字母"),
+        "错误该说人话，实际是：{err}"
+    );
 }
 
 /// 凭证被吊销之后再连就该连不上——而且要说清楚是为什么。

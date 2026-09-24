@@ -15,13 +15,14 @@
 //! 所以带浏览器特征头的请求一律拒绝（curl 和脚本不会带），Host 也必须是回环。
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Query, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::Engine;
@@ -32,8 +33,42 @@ use crate::engine::Engine;
 /// 这种问题比"端口被占，启动失败"难查得多。占用了就报错，让用户知道。
 pub const DEFAULT_PORT: u16 = 7075;
 
+/// 桌面端接进来的两个动作。无头模式没有窗口，不接就是 `None`。
+///
+/// 另一个穿云启动时靠它们和已经在跑的这个打交道（见 [`crate::peer`]）：
+/// 版本不比它新就请它把窗口叫出来、自己退出；比它新就请它让位、自己接班。
+#[derive(Clone, Default)]
+pub struct AppHooks {
+    /// 把主窗口叫到最前面
+    pub show: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// 整个应用退出：断开连接、收掉托盘图标、结束进程
+    pub quit: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
 pub async fn serve(engine: Engine, port: u16) -> std::io::Result<()> {
-    let app = Router::new()
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
+    serve_on(listener, engine, AppHooks::default()).await
+}
+
+/// 在一个已经绑好的端口上提供服务。
+///
+/// 桌面端启动时要先占住端口再做别的：端口能不能绑上，正是判断「有没有另一个
+/// 穿云已经在跑」的第一道信号，绑上了就别松手，免得中间被别人抢走。
+pub async fn serve_on(
+    listener: std::net::TcpListener,
+    engine: Engine,
+    hooks: AppHooks,
+) -> std::io::Result<()> {
+    listener.set_nonblocking(true)?;
+    let listener = tokio::net::TcpListener::from_std(listener)?;
+    if let Ok(addr) = listener.local_addr() {
+        tracing::info!(port = addr.port(), "本地 API 已就绪");
+    }
+    axum::serve(listener, router(engine, hooks)).await
+}
+
+fn router(engine: Engine, hooks: AppHooks) -> Router {
+    Router::new()
         .route("/api/status", get(status))
         .route("/api/tunnels", get(list_tunnels).post(create_tunnels))
         .route(
@@ -47,12 +82,11 @@ pub async fn serve(engine: Engine, port: u16) -> std::io::Result<()> {
         .route("/api/requests/{id}", get(get_request))
         .route("/api/requests/{id}/replay", post(replay_request))
         .route("/api/shutdown", post(shutdown))
+        .route("/api/show", post(show))
+        .route("/api/quit", post(quit))
+        .layer(Extension(hooks))
         .layer(axum::middleware::from_fn(guard_local_only))
-        .with_state(Arc::new(engine));
-
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    tracing::info!(port, "本地 API 已就绪");
-    axum::serve(listener, app).await
+        .with_state(Arc::new(engine))
 }
 
 async fn guard_local_only(req: Request, next: Next) -> Response {
@@ -88,6 +122,8 @@ struct StatusBody {
     last_error: Option<String>,
     /// 当前客户端版本
     version: &'static str,
+    /// 进程号。新版本接班时，旧的迟迟不退就靠它结束进程
+    pid: u32,
     /// 服务端上有更新的版本时才出现
     #[serde(skip_serializing_if = "Option::is_none")]
     update: Option<UpdateBody>,
@@ -109,6 +145,7 @@ async fn status(State(engine): State<Arc<Engine>>) -> Json<StatusBody> {
         reconnect_attempt: s.reconnect_attempt,
         last_error: s.last_error,
         version: env!("CARGO_PKG_VERSION"),
+        pid: std::process::id(),
         update: s.update.map(|u| UpdateBody {
             version: u.version,
             url: u.url,
@@ -514,8 +551,38 @@ async fn replay_request(
 }
 
 async fn shutdown(State(engine): State<Arc<Engine>>) -> StatusCode {
-    engine.shutdown().await;
+    // 引擎正卡在连服务器的握手里时，要等握手有结果才处理得到——别让调用方跟着干等
+    let _ = tokio::time::timeout(Duration::from_secs(3), engine.shutdown()).await;
     StatusCode::NO_CONTENT
+}
+
+async fn show(Extension(hooks): Extension<AppHooks>) -> Response {
+    match &hooks.show {
+        Some(show) => {
+            show();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        None => (
+            StatusCode::NOT_IMPLEMENTED,
+            "这个穿云没有窗口（无头模式）\n",
+        )
+            .into_response(),
+    }
+}
+
+async fn quit(Extension(hooks): Extension<AppHooks>) -> Response {
+    match &hooks.quit {
+        Some(quit) => {
+            // 只是发起：真正退出要先断开连接，这个应答得赶在进程结束前送出去
+            quit();
+            StatusCode::ACCEPTED.into_response()
+        }
+        None => (
+            StatusCode::NOT_IMPLEMENTED,
+            "这个穿云不能从这里退出（无头模式），请用 /api/shutdown\n",
+        )
+            .into_response(),
+    }
 }
 
 #[cfg(test)]
@@ -526,17 +593,105 @@ mod tests {
     use tower::ServiceExt;
 
     fn app() -> Router {
+        app_with(AppHooks::default())
+    }
+
+    /// 和 `serve_on` 用的是同一个 router，测试里不另抄一份路由表
+    fn app_with(hooks: AppHooks) -> Router {
         let engine = Engine::start(None, crate::engine::Brand::default());
-        Router::new()
-            .route("/api/status", get(status))
-            .route("/api/resolve", get(resolve))
-            .route("/api/connects", get(list_connects).post(create_connect))
-            .route("/api/connects/{port}", delete(remove_connect))
-            .route("/api/requests", get(list_requests).delete(clear_requests))
-            .route("/api/requests/{id}", get(get_request))
-            .route("/api/requests/{id}/replay", post(replay_request))
-            .layer(axum::middleware::from_fn(guard_local_only))
-            .with_state(Arc::new(engine))
+        router(engine, hooks)
+    }
+
+    async fn post_to(app: Router, uri: &str, origin: Option<&str>) -> StatusCode {
+        let mut req = HttpRequest::builder()
+            .method("POST")
+            .uri(uri)
+            .header("host", "127.0.0.1:7075");
+        if let Some(o) = origin {
+            req = req.header("origin", o);
+        }
+        app.oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    /// 记下被调了几次的钩子
+    fn counting_hook() -> (
+        Arc<dyn Fn() + Send + Sync>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hook = {
+            let n = n.clone();
+            Arc::new(move || {
+                n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+        (hook, n)
+    }
+
+    #[tokio::test]
+    async fn show_and_quit_reach_the_desktop_hooks() {
+        let (show, shown) = counting_hook();
+        let (quit, quits) = counting_hook();
+        let hooks = AppHooks {
+            show: Some(show),
+            quit: Some(quit),
+        };
+
+        assert_eq!(
+            post_to(app_with(hooks.clone()), "/api/show", None).await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(shown.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        assert_eq!(
+            post_to(app_with(hooks), "/api/quit", None).await,
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(quits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn headless_has_no_window_to_show_or_quit() {
+        assert_eq!(
+            post_to(app(), "/api/show", None).await,
+            StatusCode::NOT_IMPLEMENTED
+        );
+        assert_eq!(
+            post_to(app(), "/api/quit", None).await,
+            StatusCode::NOT_IMPLEMENTED
+        );
+    }
+
+    /// 网页里的 JS 也能往回环地址发 POST——不能让任何一个网页把用户的穿云关掉。
+    #[tokio::test]
+    async fn web_pages_cannot_quit_the_app() {
+        let (quit, quits) = counting_hook();
+        let hooks = AppHooks {
+            show: None,
+            quit: Some(quit),
+        };
+        assert_eq!(
+            post_to(
+                app_with(hooks),
+                "/api/quit",
+                Some("https://evil.example.com")
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(quits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn status_reports_version_and_pid() {
+        let (status, body) = get_body("/api/status").await;
+        assert_eq!(status, StatusCode::OK);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(v["pid"], std::process::id());
     }
 
     async fn get_body(uri: &str) -> (StatusCode, String) {

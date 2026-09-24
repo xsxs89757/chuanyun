@@ -909,3 +909,133 @@ async fn switching_a_tunnel_off_and_re_registering_keeps_the_password() {
         .unwrap();
     assert_eq!(anon.status(), 401, "门还在");
 }
+
+/// 登录好的引擎。
+async fn logged_in(server: &TestServer, token: &str) -> Engine {
+    let engine = Engine::start(None, brand(server));
+    engine
+        .login(
+            server.handle.control_addr.to_string(),
+            token,
+            &server.handle.fingerprint,
+        )
+        .await
+        .expect("登录");
+    engine
+}
+
+/// 同一个人的另一条连接正占着这个名字——比如上一次的连接服务端还没清掉，
+/// 或者托盘里还藏着一个没退出的穿云。
+async fn hold_the_name(
+    server: &TestServer,
+    token: &str,
+    name: &str,
+    port: u16,
+) -> cy_core::Connection {
+    let (events, _rx) = tokio::sync::broadcast::channel(16);
+    let holder = cy_core::connect(&server.client_config(token), events, Default::default())
+        .await
+        .expect("占名字的那条连接");
+    holder
+        .open_tunnel(cy_core::TunnelSpec::http(name, port))
+        .await
+        .expect("先占住名字");
+    holder
+}
+
+/// 撞名不该拒一次就放弃：占着名字的连接一走，隧道要自己开通，不用用户拨开关。
+///
+/// 以前撞了名就一直挂着「已被占用」。同事关了软件马上重开、或者断线重连时服务端
+/// 还没清掉旧连接，都会卡在这里。
+#[tokio::test]
+async fn a_taken_name_is_retried_until_the_holder_goes_away() {
+    let server = TestServer::start().await;
+    let token = server.add_user("zhangsan").await;
+    let echo = spawn_echo_server().await;
+    let holder = hold_the_name(&server, &token, "wx", echo).await;
+
+    let engine = logged_in(&server, &token).await;
+    let err = engine
+        .add_tunnel("wx", echo)
+        .await
+        .expect_err("名字还被占着");
+    assert!(err.contains("自动"), "该说正在重试，而不是让人改名：{err}");
+
+    // 占着名字的那条连接走了
+    holder.close(Duration::from_secs(1)).await;
+
+    wait_for(
+        "撞名的隧道自己开通",
+        Duration::from_secs(5),
+        || {
+            engine
+                .status()
+                .tunnel("wx")
+                .is_some_and(|t| t.url.is_some() && t.error.is_none())
+        },
+    )
+    .await;
+}
+
+/// 真有另一个地方一直开着它（另一台电脑、另一个穿云），等够了就别再试，
+/// 并且把原因说清楚——该去关掉那边，而不是改名。
+#[tokio::test]
+async fn a_name_that_stays_taken_gives_up_with_a_clear_reason() {
+    let server = TestServer::start().await; // 心跳 1 秒：6 秒后放弃
+    let token = server.add_user("zhangsan").await;
+    let echo = spawn_echo_server().await;
+    let _holder = hold_the_name(&server, &token, "wx", echo).await;
+
+    let engine = logged_in(&server, &token).await;
+    let _ = engine.add_tunnel("wx", echo).await;
+
+    wait_for("重试到期后放弃", Duration::from_secs(10), || {
+        engine
+            .status()
+            .tunnel("wx")
+            .and_then(|t| t.error.clone())
+            .is_some_and(|e| !e.contains("正在重试"))
+    })
+    .await;
+    let error = engine.status().tunnel("wx").unwrap().error.clone().unwrap();
+    assert!(error.contains("另一个"), "该告诉用户去哪儿找：{error}");
+}
+
+/// 引擎停下时要当场放掉隧道名：退出之后马上重开（或者新版本接班），
+/// 不该撞上自己刚才那条连接。
+#[tokio::test]
+async fn shutdown_releases_tunnel_names_right_away() {
+    let server = TestServer::start().await;
+    let token = server.add_user("zhangsan").await;
+    let echo = spawn_echo_server().await;
+
+    let engine = logged_in(&server, &token).await;
+    engine.add_tunnel("wx", echo).await.expect("开隧道");
+    assert!(server
+        .handle
+        .registry
+        .lookup("zhangsan-wx.t.example.com")
+        .is_some());
+
+    tokio::time::timeout(Duration::from_secs(3), engine.shutdown())
+        .await
+        .expect("shutdown 要在连接关掉后返回，不能一直挂着");
+
+    // 心跳是 1 秒；靠心跳超时要等 3 秒以上，这里给的时间比一次心跳还短
+    wait_for(
+        "服务端放掉隧道名",
+        Duration::from_millis(500),
+        || {
+            server
+                .handle
+                .registry
+                .lookup("zhangsan-wx.t.example.com")
+                .is_none()
+        },
+    )
+    .await;
+
+    // 同一个人马上再开，不撞名
+    let again = logged_in(&server, &token).await;
+    again.add_tunnel("wx", echo).await.expect("重开不该撞名");
+}
